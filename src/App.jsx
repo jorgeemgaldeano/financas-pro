@@ -13,7 +13,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.16.1";
+const APP_VERSION = "0.3.16.2";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -298,12 +298,35 @@ const invoiceClosureLabel = (closureStatus) => {
   return "Aberta";
 };
 
+const CLOSED_INVOICE_STATUSES = ["fechada", "parcialmente_paga", "paga"];
+
+const getInvoiceRecordFor = (faturas, cardId, monthKey) => {
+  return Array.isArray(faturas)
+    ? faturas.find(f =>
+        f.cardId === cardId &&
+        (f.competenceMonth || f.competencia || f.faturaMes) === monthKey
+      )
+    : null;
+};
+
+const getInvoiceClosureStatusForMonth = (faturas, card, monthKey, todayKey = new Date().toISOString().slice(0, 10)) => {
+  if (!card || !monthKey) return "open";
+  const invoiceRecord = getInvoiceRecordFor(faturas, card.id, monthKey);
+  if (invoiceRecord?.status === "aberta") return "open";
+  if (invoiceRecord && CLOSED_INVOICE_STATUSES.includes(invoiceRecord.status)) {
+    return invoiceRecord.closureType || invoiceRecord.fechamentoTipo || invoiceRecord.closedBy || "manual";
+  }
+  const fechamentoData = dateForMonthDay(monthKey, card.fechamento || card.closingDay || 31);
+  return todayKey > fechamentoData ? "automatic" : "open";
+};
+
 const isInvoiceClosed = (faturas, cardId, monthKey) => {
-  return Array.isArray(faturas) && faturas.some(f =>
-    f.cardId === cardId &&
-    (f.competenceMonth || f.competencia || f.faturaMes) === monthKey &&
-    ["fechada", "parcialmente_paga", "paga"].includes(f.status)
-  );
+  const invoiceRecord = getInvoiceRecordFor(faturas, cardId, monthKey);
+  return Boolean(invoiceRecord && CLOSED_INVOICE_STATUSES.includes(invoiceRecord.status));
+};
+
+const isInvoiceClosedForNewEntries = (faturas, card, monthKey) => {
+  return getInvoiceClosureStatusForMonth(faturas, card, monthKey) !== "open";
 };
 
 const getCardInvoiceCompetence = (dateKey, card, faturas = []) => {
@@ -312,15 +335,7 @@ const getCardInvoiceCompetence = (dateKey, card, faturas = []) => {
   if (!card) return baseMonth;
   const day = parseInt(String(dateKey).slice(8, 10), 10) || 1;
   const closingDay = parseInt(card.fechamento || card.closingDay || 31, 10) || 31;
-  let competence = day <= closingDay ? baseMonth : monthOffset(baseMonth, 1);
-
-  // Se a fatura já foi fechada manualmente, o lançamento entra na próxima fatura aberta.
-  let guard = 0;
-  while (isInvoiceClosed(faturas, card.id, competence) && guard < 24) {
-    competence = monthOffset(competence, 1);
-    guard += 1;
-  }
-  return competence;
+  return day <= closingDay ? baseMonth : monthOffset(baseMonth, 1);
 };
 
 const signedCardAmount = (t) => {
@@ -1770,18 +1785,14 @@ export default function App() {
     const gastoSim = simTrans.filter(t=>t.cartaoId===c.id&&transMonthKey(t)===selMonth).reduce((s,t)=>s+t.valor,0);
     const contaPag = contas.find(ct => ct.id === getCardPaymentAccountId(c));
     const invoiceId = invoiceIdFor(c.id, selMonth);
-    const invoiceRecord = faturas.find(f => f.id === invoiceId || (f.cardId === c.id && (f.competenceMonth || f.competencia || f.faturaMes) === selMonth));
+    const invoiceRecord = getInvoiceRecordFor(faturas, c.id, selMonth) || faturas.find(f => f.id === invoiceId);
     const paymentRecord = invoiceRecord?.paymentTransactionId
       ? trans.find(t => t.id === invoiceRecord.paymentTransactionId)
       : trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao");
     const totalFatura = roundMoney(Number(invoiceRecord?.finalAmount) || fat.total);
     const valorPagoFatura = roundMoney(Number(paymentRecord?.valorPago) || Number(invoiceRecord?.paidAmount) || 0);
     const valorPendenteFatura = Math.max(0, roundMoney(totalFatura - valorPagoFatura));
-    const fechamentoData = dateForMonthDay(selMonth, c.fechamento);
-    const hoje = new Date().toISOString().slice(0, 10);
-    const fechamentoTipo = invoiceRecord
-      ? (invoiceRecord.closureType || invoiceRecord.fechamentoTipo || invoiceRecord.closedBy || "manual")
-      : (hoje > fechamentoData ? "automatic" : "open");
+    const fechamentoTipo = getInvoiceClosureStatusForMonth(faturas, c, selMonth);
     return {
       ...c,
       ...fat,
@@ -1840,6 +1851,20 @@ export default function App() {
     return getCardInvoiceCompetence(dateKey, card, faturas);
   }, [cards, faturas]);
 
+  const assertCardInvoicesOpenForEntries = useCallback((entries) => {
+    const closedEntry = entries.find(entry => {
+      const card = cards.find(c => c.id === entry.cardId);
+      return card && isInvoiceClosedForNewEntries(faturas, card, entry.competencia);
+    });
+
+    if (!closedEntry) return true;
+
+    const card = cards.find(c => c.id === closedEntry.cardId);
+    const closureStatus = getInvoiceClosureStatusForMonth(faturas, card, closedEntry.competencia);
+    alert(`A fatura de ${card?.nome || "cartão"} em ${formatMonthBR(closedEntry.competencia)} está ${invoiceClosureLabel(closureStatus).toLowerCase()}. Para incluir lançamentos, reabra a fatura e depois feche novamente manualmente para atualizar o pagamento previsto.`);
+    return false;
+  }, [cards, faturas]);
+
   const parcPreview=useMemo(()=>{
     if(!form.parcelado||!form.data) return [];
     const n=parseInt(form.parcelas)||1;
@@ -1877,11 +1902,13 @@ export default function App() {
       const n=parseInt(form.parcelas)||1;
       const vp=form.modoParc==="total"?moneyToNumber(form.valor)/n:moneyToNumber(form.valor);
       const grp=uid();
-      setTrans(p=>[...p,...Array.from({length:n},(_,i)=>{
+      const novosLancamentos = Array.from({length:n},(_,i)=>{
         const dateKey = addMonthsToDate(form.data, i);
         const competencia = monthOffset(primeiraCompetenciaCartao, i);
         return { ...base, id:uid(), valor:parseFloat(vp.toFixed(2)), data:dateKey, competencia, faturaCompetencia:competencia, parcela:i+1, totalParcelas:n, parcelaGrupo:grp, fixo:false, status:"pago", valorPago:parseFloat(vp.toFixed(2)) };
-      })]);
+      });
+      if(!assertCardInvoicesOpenForEntries(novosLancamentos)) return;
+      setTrans(p=>[...p,...novosLancamentos]);
     }
     // Lançamento fixo/recorrente — gera N meses a partir do mês selecionado
     else if(form.fixo){
@@ -1890,7 +1917,7 @@ export default function App() {
       const grp   = uid();
       // Mês de início = mês do seletor de mês (selMonth) do dashboard
       const [startY, startM] = selMonth.split("-").map(Number);
-      setTrans(p=>[...p,...Array.from({length:meses},(_,i)=>{
+      const novosLancamentos = Array.from({length:meses},(_,i)=>{
         // Garante que o dia existe no mês (ex: dia 31 em fev → último dia)
         const dt = new Date(startY, startM-1+i, dia);
         // Se dia não existe no mês, JS avança automaticamente (ex: 31/fev→3/mar) — corrigi com clamp
@@ -1902,12 +1929,16 @@ export default function App() {
         return { ...base, id:uid(), valor:parseFloat(moneyToNumber(form.valor).toFixed(2)),
                  data:dateKey, competencia, faturaCompetencia:isCartao ? competencia : undefined, fixo:true,
                  parcelaGrupo:grp, parcela:i+1, totalParcelas:meses, status:"previsto", valorPago:0 };
-      })]);
+      });
+      if(isCartao && !assertCardInvoicesOpenForEntries(novosLancamentos)) return;
+      setTrans(p=>[...p,...novosLancamentos]);
     }
     // Lançamento simples
     else {
       const competencia = isCartao ? primeiraCompetenciaCartao : mKey(form.data);
-      setTrans(p=>[...p,{ ...base, id:uid(), valor:moneyToNumber(form.valor), data:form.data, competencia, faturaCompetencia:isCartao ? competencia : undefined, fixo:false, status:"pago", valorPago:moneyToNumber(form.valor) }]);
+      const novoLancamento = { ...base, id:uid(), valor:moneyToNumber(form.valor), data:form.data, competencia, faturaCompetencia:isCartao ? competencia : undefined, fixo:false, status:"pago", valorPago:moneyToNumber(form.valor) };
+      if(isCartao && !assertCardInvoicesOpenForEntries([novoLancamento])) return;
+      setTrans(p=>[...p,novoLancamento]);
     }
     closeModal();
   };
@@ -2051,6 +2082,12 @@ export default function App() {
   };
 
   const adicionarAjusteFatura = (cardId, tipoAjuste) => {
+    const card = cards.find(c => c.id === cardId);
+    if (card && isInvoiceClosedForNewEntries(faturas, card, selMonth)) {
+      const closureStatus = getInvoiceClosureStatusForMonth(faturas, card, selMonth);
+      alert(`A fatura de ${card.nome} em ${formatMonthBR(selMonth)} está ${invoiceClosureLabel(closureStatus).toLowerCase()}. Para incluir ajuste, reabra a fatura e depois feche novamente manualmente para atualizar o pagamento previsto.`);
+      return;
+    }
     const valorRaw = window.prompt(tipoAjuste === "acrescimo" ? "Valor do acréscimo da fatura" : "Valor da redução da fatura", "");
     if (valorRaw === null) return;
     const valor = moneyToNumber(valorRaw);
@@ -2148,6 +2185,63 @@ export default function App() {
         fechamentoTipo: "manual",
         closedBy: "manual",
         closedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return prev.some(f => f.id === invoiceId) ? prev.map(f => f.id === invoiceId ? { ...f, ...nova } : f) : [...prev, nova];
+    });
+  };
+
+  const abrirFaturaCartao = (cardId) => {
+    const card = cards.find(c => c.id === cardId);
+    if (!card) return;
+    const contaPagamentoId = getCardPaymentAccountId(card, primeiraContaCorrenteId);
+    if (!contaPagamentoId) { alert("Cartão sem conta corrente associada."); return; }
+
+    const invoiceId = invoiceIdFor(cardId, selMonth);
+    const existingInvoice = getInvoiceRecordFor(faturas, cardId, selMonth) || faturas.find(f => f.id === invoiceId);
+    const existingPayment = existingInvoice?.paymentTransactionId
+      ? trans.find(t => t.id === existingInvoice.paymentTransactionId)
+      : trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao");
+
+    const fat = calcularFaturaCartao(card, selMonth);
+    const totalFatura = roundMoney(fat.total);
+    const valorPagoAtual = roundMoney(Number(existingPayment?.valorPago) || Number(existingInvoice?.paidAmount) || 0);
+    const paymentMonth = monthOffset(selMonth, 1);
+    const paymentDate = dateForMonthDay(paymentMonth, card.vencimento);
+
+    if (existingPayment) {
+      setTrans(prev => prev.map(t => t.id === existingPayment.id ? {
+        ...t,
+        valor: totalFatura,
+        data: paymentDate,
+        competencia: paymentMonth,
+        contaId: contaPagamentoId,
+        accountId: contaPagamentoId,
+        status: paymentStatusByPaidAmount(t.valorPago, totalFatura),
+        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago) || 0))),
+        updatedAt: new Date().toISOString(),
+      } : t));
+    }
+
+    setFaturas(prev => {
+      const nova = {
+        id: invoiceId,
+        cardId,
+        accountId: contaPagamentoId,
+        contaPagamentoId,
+        competenceMonth: selMonth,
+        dueMonth: paymentMonth,
+        status: "aberta",
+        expensesTotal: roundMoney(totalFatura - fat.ajustes),
+        adjustmentsTotal: roundMoney(fat.ajustes),
+        finalAmount: totalFatura,
+        paidAmount: valorPagoAtual,
+        pendingAmount: Math.max(0, roundMoney(totalFatura - valorPagoAtual)),
+        paymentTransactionId: existingPayment?.id || existingInvoice?.paymentTransactionId || null,
+        closureType: "open",
+        fechamentoTipo: "reaberta",
+        closedBy: null,
+        reopenedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
       return prev.some(f => f.id === invoiceId) ? prev.map(f => f.id === invoiceId ? { ...f, ...nova } : f) : [...prev, nova];
@@ -2355,6 +2449,13 @@ export default function App() {
     if(!file) return;
     if(impMode==="cartao"&&!impCId){ setImpErr("Selecione o cartão antes de carregar o arquivo."); return; }
     if(impMode==="cartao"&&!impCompetencia){ setImpErr("Informe a competência da fatura antes de carregar o arquivo."); return; }
+    if(impMode==="cartao"){
+      const card = cards.find(c => c.id === impCId);
+      if(card && isInvoiceClosedForNewEntries(faturas, card, impCompetencia)){
+        setImpErr(`A fatura de ${card.nome} em ${formatMonthBR(impCompetencia)} está ${invoiceClosureLabel(getInvoiceClosureStatusForMonth(faturas, card, impCompetencia)).toLowerCase()}. Reabra a fatura antes de importar lançamentos.`);
+        return;
+      }
+    }
     if((impMode==="bancario"||impMode==="vale")&&!impContaId){ setImpErr("Selecione a conta de destino antes de carregar o arquivo."); return; }
     if(impMode==="vale"&&!impValeYear){ setImpErr("Informe o ano do extrato antes de carregar o arquivo."); return; }
     setImpErr(""); setImpFile(file.name); setImpIgnored([]); setLastImportReport(null);
@@ -2406,6 +2507,13 @@ export default function App() {
   const confirmImport=()=>{
     if(impMode==="cartao"&&!impCId){ setImpErr("Selecione o cartão."); return; }
     if(impMode==="cartao"&&!impCompetencia){ setImpErr("Informe a competência da fatura."); return; }
+    if(impMode==="cartao"){
+      const card = cards.find(c => c.id === impCId);
+      if(card && isInvoiceClosedForNewEntries(faturas, card, impCompetencia)){
+        setImpErr(`A fatura de ${card.nome} em ${formatMonthBR(impCompetencia)} está ${invoiceClosureLabel(getInvoiceClosureStatusForMonth(faturas, card, impCompetencia)).toLowerCase()}. Reabra a fatura antes de salvar a importação.`);
+        return;
+      }
+    }
     if((impMode==="bancario"||impMode==="vale")&&!impContaId){ setImpErr("Selecione a conta de destino."); return; }
     const ok=impRows.filter(r=>impTog[r._id]);
     const importBatchId=`batch_${uid()}`;
@@ -3062,6 +3170,7 @@ export default function App() {
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
                   <button onClick={()=>adicionarAjusteFatura(c.id,"acrescimo")} style={btn(C.gold,{ color:C.navy, fontSize:12, padding:"6px 12px" })}>+ Ajuste fatura</button>
                   <button onClick={()=>adicionarAjusteFatura(c.id,"reducao")} style={btn(C.border,{ fontSize:12, padding:"6px 12px" })}>− Ajuste fatura</button>
+                  {c.invoiceClosureStatus!=="open"&&<button onClick={()=>abrirFaturaCartao(c.id)} style={btn(C.gold,{ color:C.navy, fontSize:12, padding:"6px 12px" })}>Reabrir fatura</button>}
                   <button onClick={()=>fecharFaturaCartao(c.id)} style={btn(C.emerald,{ fontSize:12, padding:"6px 12px" })}>Fechar fatura e lançar pagamento previsto</button>
                   <button onClick={()=>exportCreditCardExpensesTxt(c.id, selMonth)} style={btn(C.border,{ fontSize:12, padding:"6px 12px" })}>Exportar TXT</button>
                 </div>
