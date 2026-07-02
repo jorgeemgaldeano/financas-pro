@@ -3,6 +3,7 @@ import { RequiredFieldModal, requiredFieldInfo, highlightIfRequired } from "./co
 import { DateInput } from "./components/ui/DateInput.jsx";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
 import { guessCategoryForTransaction, normText } from "./services/categoryService.js";
+import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
 import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
 import { useLS, lsSave } from "./hooks/useLocalStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
@@ -12,7 +13,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.14";
+const APP_VERSION = "0.3.15.2";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -299,16 +300,6 @@ const signedCardAmount = (t) => {
   if (t.tipo === "receita") return -v;
   return v;
 };
-const moneyKey = (value) => Math.round(moneyToNumber(value) * 100);
-const isIOFDescription = (desc) => /^\s*IOF\b/i.test(String(desc || ""));
-
-const ignoredBankImportReason = (desc) => {
-  const d = normText(desc);
-  if (!d) return "";
-  if (d.includes("bb rende facil") || d.includes("rende facil")) return "BB Rende Fácil";
-  return "";
-};
-
 function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
   return (
     <input
@@ -435,7 +426,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
   const novoDespForm = () => ({
     tipo:"receita", descricao:"", valor:"", data:new Date().toISOString().slice(0,10),
     cartaoId:"", catId:"", status:"pendente",
-    parcelado:false, modoParc:"total", parcelas:"",
+    parcelado:false, modoParc:"total", parcelas:2,
     fixo:false, fixoDia:"", fixoMeses:12
   });
   const [modalDesp,   setModalDesp]  = useState(false);
@@ -473,8 +464,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
 
   const despParcPreview = useMemo(()=>{
     if(!despForm.parcelado||!despForm.data) return [];
-    const n = parseInt(despForm.parcelas, 10);
-    if (!Number.isFinite(n) || n < 2 || n > 48) return [];
+    const n = Math.max(2, parseInt(despForm.parcelas)||2);
     const [py,pm2,pd] = despForm.data.split("-").map(Number);
     const vp = despForm.modoParc === "total" ? moneyToNumber(despForm.valor)/n : moneyToNumber(despForm.valor);
     return Array.from({length:n},(_,i)=>{
@@ -559,10 +549,6 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
     if(!requireDespField(Boolean(despForm.catId), "Categoria", "despCatId")) return;
     if(!despForm.fixo && !requireDespField(Boolean(despForm.data), "Data", "despData")) return;
     if(despForm.fixo && !requireDespField(Boolean(despForm.fixoDia) && parseInt(despForm.fixoDia)>=1 && parseInt(despForm.fixoDia)<=31, "Dia do mês", "despFixoDia")) return;
-    if(despForm.parcelado){
-      const parcelasDesp = parseInt(despForm.parcelas, 10);
-      if(!requireDespField(Number.isFinite(parcelasDesp) && parcelasDesp >= 2 && parcelasDesp <= 48, "Número de parcelas", "despParcelas")) return;
-    }
 
     const tipo = despForm.tipo || "receita";
     const valorInformado = moneyToNumber(despForm.valor);
@@ -577,7 +563,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
     };
 
     if(despForm.parcelado){
-      const n = parseInt(despForm.parcelas, 10);
+      const n = Math.max(2, parseInt(despForm.parcelas)||2);
       const [py,pm2,pd] = despForm.data.split("-").map(Number);
       const vp = despForm.modoParc === "total" ? valorInformado/n : valorInformado;
       const grp = uid();
@@ -1155,7 +1141,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
 
               <div style={{ background:C.navy, borderRadius:9, padding:"11px 13px" }}>
                 <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, cursor:"pointer", marginBottom:despForm.parcelado?11:0 }}>
-                  <input type="checkbox" checked={!!despForm.parcelado} onChange={e=>setDespForm(f=>({...f,parcelado:e.target.checked,parcelas:"",fixo:e.target.checked?false:f.fixo}))}/>
+                  <input type="checkbox" checked={!!despForm.parcelado} onChange={e=>setDespForm(f=>({...f,parcelado:e.target.checked,fixo:e.target.checked?false:f.fixo}))}/>
                   <span style={{ fontWeight:600 }}>Compra parcelada</span>
                 </label>
                 {despForm.parcelado&&(
@@ -1169,10 +1155,10 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
                       ))}
                     </div>
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
-                      <div><div style={lbl}>Parcelas</div><input style={highlightIfRequired(inp, requiredModal, "despParcelas")} type="number" min={2} max={48} placeholder="Ex: 3" value={despForm.parcelas ?? ""} onChange={e=>setDespForm(f=>({...f,parcelas:e.target.value}))}/></div>
+                      <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={2} max={48} value={despForm.parcelas||2} onChange={e=>setDespForm(f=>({...f,parcelas:e.target.value}))}/></div>
                       <div><div style={lbl}>Data 1ª parcela</div><DateInput style={highlightIfRequired(inp, requiredModal, "despData")} value={despForm.data||""} onChange={value=>setDespForm(f=>({...f,data:value}))}/></div>
                     </div>
-                    {despForm.valor&&Number.isFinite(parseInt(despForm.parcelas, 10))&&parseInt(despForm.parcelas, 10)>=2&&(
+                    {despForm.valor&&despForm.parcelas&&(
                       <div style={{ marginTop:7, fontSize:12, color:C.soft }}>
                         {despForm.modoParc==="total"
                           ?`${despForm.parcelas}× de ${fmtBRL(moneyToNumber(despForm.valor)/parseInt(despForm.parcelas))}`
@@ -1634,7 +1620,7 @@ export default function App() {
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
   const [sims,     setSims]     = useLS("simulacoes", []);
-  const [simForm,  setSimForm]  = useState({ modoParc:"total", parcelas:"" });
+  const [simForm,  setSimForm]  = useState({ modoParc:"total", parcelas:1 });
   const [showContaForm, setShowContaForm] = useState(false);
   const [novaContaForm, setNovaContaForm] = useState({ nome:"", tipo:"corrente" });
   const [impStep,  setImpStep]  = useState("upload");
@@ -1790,7 +1776,7 @@ export default function App() {
     const primeiraCC = contas.find(c=>c.tipo==="corrente");
     setModal("addTrans");
     setForm({ tipo:"despesa", origemTipo:"corrente", contaId:primeiraCC?.id||"", cartaoId:"",
-              fixo:false, parcelado:false, modoParc:"total", parcelas:"",
+              fixo:false, parcelado:false, modoParc:"total", parcelas:2,
               fixoDia:"", fixoMeses:12 });
   };
   const closeModal=()=>{ setModal(null); setForm({}); };
@@ -1803,8 +1789,7 @@ export default function App() {
 
   const parcPreview=useMemo(()=>{
     if(!form.parcelado||!form.data) return [];
-    const n = parseInt(form.parcelas, 10);
-    if (!Number.isFinite(n) || n < 2 || n > 48) return [];
+    const n=parseInt(form.parcelas)||1;
     const vp=form.modoParc==="total"?moneyToNumber(form.valor)/n:moneyToNumber(form.valor);
     const firstCompetence = form.origemTipo === "cartao"
       ? resolveCardCompetencia(form.data, form.cartaoId, form.faturaCompetencia)
@@ -1825,10 +1810,6 @@ export default function App() {
     if(!isCartao&&!requireField(Boolean(form.contaId), "Conta / Vale", "contaId")) return;
     if(!form.fixo&&!requireField(Boolean(form.data), "Data", "data")) return;
     if(form.fixo&&!requireField(Boolean(form.fixoDia) && parseInt(form.fixoDia)>=1 && parseInt(form.fixoDia)<=31, "Dia do mês", "fixoDia")) return;
-    if(isCartao&&form.parcelado){
-      const parcelasCartao = parseInt(form.parcelas, 10);
-      if(!requireField(Number.isFinite(parcelasCartao) && parcelasCartao >= 2 && parcelasCartao <= 48, "Número de parcelas", "parcelas")) return;
-    }
 
     // Derivar campos de origem
     const conta = contas.find(c=>c.id===form.contaId);
@@ -1840,7 +1821,7 @@ export default function App() {
 
     // Cartão parcelado
     if(isCartao&&form.parcelado){
-      const n = parseInt(form.parcelas, 10);
+      const n=parseInt(form.parcelas)||1;
       const vp=form.modoParc==="total"?moneyToNumber(form.valor)/n:moneyToNumber(form.valor);
       const grp=uid();
       setTrans(p=>[...p,...Array.from({length:n},(_,i)=>{
@@ -2075,10 +2056,8 @@ export default function App() {
     if(!requireField(Boolean(simForm.cartaoId), "Cartão", "simCartaoId")) return;
     if(!requireField(Boolean(simForm.catId), "Categoria", "simCatId")) return;
     const competencia = resolveCardCompetencia(simForm.data, simForm.cartaoId, simForm.faturaCompetencia);
-    const parcelasSim = parseInt(simForm.parcelas, 10);
-    if(!requireField(Number.isFinite(parcelasSim) && parcelasSim >= 1 && parcelasSim <= 48, "Número de parcelas", "simParcelas")) return;
-    setSims(p=>[...p,{ ...simForm, id:"sim_"+uid(), valor:moneyToNumber(simForm.valor), parcelas:parcelasSim, faturaCompetencia:competencia }]);
-    setSimForm(p=>({ modoParc:p.modoParc, parcelas:"", cartaoId:p.cartaoId, faturaCompetencia:"" }));
+    setSims(p=>[...p,{ ...simForm, id:"sim_"+uid(), valor:moneyToNumber(simForm.valor), parcelas:parseInt(simForm.parcelas)||1, faturaCompetencia:competencia }]);
+    setSimForm(p=>({ modoParc:p.modoParc, parcelas:1, cartaoId:p.cartaoId, faturaCompetencia:"" }));
   };
   const delSim=(id)=>setSims(p=>p.filter(s=>s.id!==id));
   const refazerSim=(id)=>setSims(p=>p.map(s=>s.id===id?{...s, recalculatedAt:new Date().toISOString()}:s));
@@ -2229,56 +2208,13 @@ export default function App() {
   const recolorCat=(id,cor)=>setCats(p=>p.map(c=>c.id===id?{ ...c,cor }:c));
 
   // Import
-  const pDate=(s)=>{
-    if(!s) return null;
-    s=String(s).trim();
-    if(/^\d{8}/.test(s)) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
-    const compact=s.match(/^(\d{2})(\d{2})(\d{4})$/);
-    if(compact) return `${compact[3]}-${compact[2]}-${compact[1]}`;
-    const m1=s.match(/^(\d{2})\/(\d{2})\/(\d{2,4})$/);
-    if(m1){ const yr=m1[3].length===2?"20"+m1[3]:m1[3]; return `${yr}-${m1[2]}-${m1[1]}`; }
-    const m2=s.match(/^(\d{2})-(\d{2})-(\d{2,4})$/);
-    if(m2){ const yr=m2[3].length===2?"20"+m2[3]:m2[3]; return `${yr}-${m2[2]}-${m2[1]}`; }
-    if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    return null;
-  };
-  const pVal=(s)=>{ if(!s) return null; const v=moneyToNumber(s); return Number.isFinite(v)?v:null; };
-  const pSignedVal=(value, dc="")=>{
-    if(value===null||value===undefined) return null;
-    const raw=String(value).trim();
-    if(!raw) return null;
-    const dcText=normText(`${dc} ${raw}`);
-    const debit=/\b(d|debito|saida|saque)\b/.test(dcText) || /^\(.*\)$/.test(raw) || /^\s*-/.test(raw) || /-\s*$/.test(raw);
-    const credit=/\b(c|credito|entrada|deposito)\b/.test(dcText);
-    const cleaned=raw
-      .replace(/^\((.*)\)$/,"$1")
-      .replace(/[^\d,\.\-]/g,"")
-      .replace(/-$/,"-");
-    let parsed=moneyToNumber(cleaned);
-    if(!Number.isFinite(parsed)) return null;
-    parsed=Math.abs(parsed);
-    if(debit&&!credit) return -parsed;
-    if(credit&&!debit) return parsed;
-    if(/^\s*-/.test(raw)||/-\s*$/.test(raw)) return -parsed;
-    return parsed;
-  };
-  const parseDelimitedLine=(line,sep)=>{
-    const out=[]; let cur="", inQuotes=false;
-    for(let i=0;i<line.length;i++){
-      const ch=line[i];
-      if(ch==='"'){
-        if(inQuotes&&line[i+1]==='"'){ cur+='"'; i++; }
-        else inQuotes=!inQuotes;
-      } else if(ch===sep&&!inQuotes){ out.push(cur.trim()); cur=""; }
-      else cur+=ch;
-    }
-    out.push(cur.trim());
-    return out.map(c=>c.replace(/^"|"$/g,"").trim());
-  };
-  const detectSep=(line)=>{
-    const candidates=[";",",","\t","|"];
-    return candidates.map(sep=>({ sep, count:parseDelimitedLine(line,sep).length })).sort((a,b)=>b.count-a.count)[0]?.sep || ";";
-  };
+  const categorizeImportRow=(desc,tipo="despesa")=>guessCategoryForTransaction({
+    desc,
+    tipo,
+    params,
+    trans,
+    cats,
+  });
 
   const extractPdfTextFromFile=async(file)=>{
     const buffer=await file.arrayBuffer();
@@ -2309,281 +2245,6 @@ export default function App() {
     reader.readAsText(file,encoding);
   });
 
-  const MONTHS_PT={
-    janeiro:1, fevereiro:2, marco:3, março:3, abril:4, maio:5, junho:6,
-    julho:7, agosto:8, setembro:9, outubro:10, novembro:11, dezembro:12
-  };
-  const parsePtDateNoYear=(line,year)=>{
-    const m=normText(line).match(/(?:segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo)-?feira?,?\s*(\d{1,2})\s+([a-zç]+)/i)
-      || normText(line).match(/^(\d{1,2})\s+([a-zç]+)$/i);
-    if(!m) return null;
-    const day=String(parseInt(m[1],10)).padStart(2,"0");
-    const month=MONTHS_PT[m[2]];
-    if(!month) return null;
-    const safeYear=parseInt(year,10)||new Date().getFullYear();
-    return `${safeYear}-${String(month).padStart(2,"0")}-${day}`;
-  };
-
-  const parseValePluxeeText=(text)=>{
-    const rows=[];
-    const lines=String(text||"").split(/\r?\n/).map(line=>line.replace(/\s+/g," ").trim()).filter(Boolean);
-    let currentDate=null;
-    let current=null;
-    let pendingTime=null;
-    const flush=()=>{
-      if(!current||!currentDate) return;
-      const block=[current.operacao,...current.parts].join(" ").replace(/\s+/g," ").trim();
-      const moneyMatches=[...block.matchAll(/R\$\s*([\d\.]+,\d{2})/g)];
-      if(!moneyMatches.length) return;
-      const amount=moneyToNumber(moneyMatches[moneyMatches.length-1][1]);
-      if(!amount) return;
-      const blockNorm=normText(block);
-      // Regra Pluxee validada: somente DISPONIBILIZACAO DE VALOR é crédito/receita.
-      // Todos os demais movimentos do extrato de vale são débitos/despesas.
-      const tipo=blockNorm.includes("disponibilizacao de valor")?"receita":"despesa";
-      const carteira=blockNorm.includes("alimentacao")?"alimentacao":blockNorm.includes("refeicao")?"refeicao":"multibeneficios";
-      let descricao=block
-        .replace(/R\$\s*[\d\.]+,\d{2}/g,"")
-        .replace(/^Compra no\s+(Refeição|Refeicao|Alimentação|Alimentacao)\s*/i,"")
-        .replace(/^Saldo liberado\s*/i,"")
-        .replace(/^Agendamento de Benefício\s*/i,"")
-        .replace(/^Agendamento de Beneficio\s*/i,"")
-        .replace(/\s+/g," ")
-        .trim();
-      if(!descricao) descricao=tipo==="receita"?"Disponibilização de valor":"Débito no vale";
-      rows.push({
-        _id:`imp_${uid()}`,
-        importTipo:"vale",
-        fornecedorVale:"pluxee",
-        carteiraVale:carteira,
-        hora:current.hora,
-        data:currentDate,
-        descricao,
-        tipo,
-        valor:Math.abs(amount),
-        catId:guessCat(descricao,tipo),
-        contaId:impContaId,
-      });
-    };
-    lines.forEach(line=>{
-      const parsedDate=parsePtDateNoYear(line,impValeYear);
-      if(parsedDate){ flush(); currentDate=parsedDate; current=null; pendingTime=null; return; }
-      const timeOnly=line.match(/^(\d{2}:\d{2})$/);
-      if(timeOnly){ flush(); pendingTime=timeOnly[1]; current=null; return; }
-      const tx=line.match(/^(\d{2}:\d{2})\s+(.+)$/);
-      if(tx){ flush(); current={ hora:tx[1], operacao:tx[2], parts:[] }; pendingTime=null; return; }
-      if(pendingTime){ current={ hora:pendingTime, operacao:line, parts:[] }; pendingTime=null; return; }
-      if(current) current.parts.push(line);
-    });
-    flush();
-    return rows.filter(row=>!isBalanceOrTotalRow(row.descricao));
-  };
-  const isBalanceOrTotalRow=(desc)=>/^(saldo|s\s*a\s*l\s*d\s*o|total)\b|saldo\s+(anterior|atual|final|dispon[ií]vel)|totalizador/i.test(String(desc||""));
-  const guessCat=(desc,tipo="despesa")=>guessCategoryForTransaction({
-    desc,
-    tipo,
-    params,
-    trans,
-    cats,
-  });
-  const parseInstallmentInfo=(desc)=>{
-    if(isIOFDescription(desc)) return null;
-    const text=String(desc||"");
-    const patterns=[
-      { rx: /(\b|\D)(\d{1,2})\s*\/\s*(\d{1,2})(\b|\D)/, currentIndex:2, totalIndex:3 },
-      { rx: /parc(?:ela)?\s*(\d{1,2})\s*(?:de|\/)\s*(\d{1,2})/i, currentIndex:1, totalIndex:2 },
-      { rx: /(\d{1,2})\s*de\s*(\d{1,2})/i, currentIndex:1, totalIndex:2 },
-    ];
-    for(const { rx, currentIndex, totalIndex } of patterns){
-      const m=text.match(rx);
-      if(!m) continue;
-      const current=parseInt(m[currentIndex],10);
-      const total=parseInt(m[totalIndex],10);
-      if(current>0&&total>1&&current<=total&&total<=60) return { current, total };
-    }
-    return null;
-  };
-  const formatInstallmentText=(desc,current,total)=>{
-    const text=String(desc||"").trim();
-    const currentTxt=String(current).padStart(2,"0");
-    const totalTxt=String(total).padStart(2,"0");
-    if(/(\b|\D)\d{1,2}\s*\/\s*\d{1,2}(\b|\D)/.test(text)) return text.replace(/(\b|\D)(\d{1,2})\s*\/\s*(\d{1,2})(\b|\D)/, `$1${currentTxt}/${totalTxt}$4`);
-    if(/parc(?:ela)?\s*\d{1,2}\s*(?:de|\/)\s*\d{1,2}/i.test(text)) return text.replace(/parc(?:ela)?\s*\d{1,2}\s*(?:de|\/)\s*\d{1,2}/i, `Parcela ${currentTxt}/${totalTxt}`);
-    if(/\d{1,2}\s*de\s*\d{1,2}/i.test(text)) return text.replace(/\d{1,2}\s*de\s*\d{1,2}/i, `${currentTxt} de ${totalTxt}`);
-    return `${text} ${currentTxt}/${totalTxt}`.trim();
-  };
-  const getImportTargetId=(row={},mode=impMode)=>(mode==="bancario"||mode==="vale")?(row.contaId||impContaId):(row.cartaoId||impCId);
-  const buildImportKey=(row, targetId=null, competencia=null, mode=null)=>{
-    const m=mode||row.importTipo||impMode;
-    const target=targetId||getImportTargetId(row,m);
-    const month=competencia || row.competencia || (m==="cartao"?transMonthKey(row):mKey(row.data));
-    return [m,target||"",month,row.tipo||"",row.data,moneyKey(row.valor),normText(row.descricao)].join("|");
-  };
-  const buildLegacyImportKey=(row, targetId=null, mode=null)=>{
-    const m=mode||row.importTipo||impMode;
-    const target=targetId||getImportTargetId(row,m);
-    return [m,target||"",row.data,moneyKey(row.valor),normText(row.descricao)].join("|");
-  };
-  const expandImportedRows=(rows)=>rows.flatMap(row=>{
-    if(row.importTipo==="bancario"||row.importTipo==="vale") return [{ ...row, parcela:null, totalParcelas:null, parcelaGrupo:null }];
-    if(isIOFDescription(row.descricao)) return [{ ...row, competencia:impCompetencia, parcela:null, totalParcelas:null, parcelaGrupo:null }];
-    const info=row.parcelaInfo || parseInstallmentInfo(row.descricao);
-    if(!info) return [{ ...row, competencia:impCompetencia, parcela:null, totalParcelas:null, parcelaGrupo:null }];
-    const grupo=`imp_${uid()}`;
-    const remaining=info.total-info.current+1;
-    return Array.from({length:remaining},(_,i)=>{
-      const parcela=info.current+i;
-      const competencia=addMonthsToMonthKey(impCompetencia,i);
-      return {
-        ...row,
-        _id:`${row._id}_${parcela}_${info.total}_${i}`,
-        descricao:formatInstallmentText(row.descricao,parcela,info.total),
-        data:row.data,
-        dataCompra:row.data,
-        competencia,
-        parcela,
-        totalParcelas:info.total,
-        parcelaGrupo:grupo,
-        importadoFuturo:i>0,
-      };
-    });
-  });
-  const parseOFX=(t,{ mode="cartao" }={})=>{
-    const rows=[]; const rx=/<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi; let m;
-    while((m=rx.exec(t))!==null){
-      const b=m[1];
-      const g=(tag)=>{ const m2=b.match(new RegExp(`<${tag}>([^<\\n\\r]+)`,"i")); return m2?m2[1].trim():""; };
-      const dt=pDate(g("DTPOSTED")||g("DTUSER"));
-      const amt=pSignedVal(g("TRNAMT"));
-      const memo=[g("MEMO"),g("NAME"),g("CHECKNUM")].filter(Boolean).join(" · ") || "Lançamento importado";
-      if(!dt||amt===null||Math.abs(amt)===0||isBalanceOrTotalRow(memo)) continue;
-      if(mode==="bancario"&&ignoredBankImportReason(memo)) continue;
-      if(mode==="cartao"&&amt>=0) continue;
-      const tipo=amt>=0?"receita":"despesa";
-      rows.push({
-        _id:g("FITID")||`imp_${uid()}`,
-        importTipo:mode,
-        data:dt,
-        dataCompra:dt,
-        descricao:memo,
-        tipo,
-        valor:Math.abs(amt),
-        catId:guessCat(memo,tipo),
-        parcelaInfo:mode==="cartao"?parseInstallmentInfo(memo):null,
-        bancoImportacao:impBanco,
-      });
-    }
-    return rows;
-  };
-  const parseCardCSV=(t)=>{
-    const rows=[];
-    const lines=t.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-    const sep=detectSep(lines[0]||"");
-    const hdr=parseDelimitedLine(lines[0]||"",sep).map(h=>normText(h));
-    const dI=hdr.findIndex(h=>/data|date/.test(h));
-    const dcI=hdr.findIndex(h=>/descri|hist|memo|estabelecimento|lancamento/.test(h));
-    const vI=hdr.findIndex(h=>/valor|value|amount|debito/.test(h));
-    const start=(dI>=0||dcI>=0)?1:0;
-    for(let i=start;i<lines.length;i++){
-      const cols=parseDelimitedLine(lines[i],sep);
-      const dtR=cols[dI>=0?dI:0];
-      let dt=pDate(dtR);
-      if(!dt){ const p=dtR?.split("/"); if(p?.length===3) dt=pDate(`${p[1]}/${p[0]}/${p[2]}`); }
-      if(!dt) continue;
-      const desc=dcI>=0?cols[dcI]:cols[1]||"";
-      if(/total|saldo|pagamento/i.test(desc)) continue;
-      let val=null;
-      if(vI>=0){ val=pVal(cols[vI]); }
-      else { for(let j=cols.length-1;j>=2;j--){ const v=pVal(cols[j]); if(v!==null){ val=v; break; } } }
-      if(val===null||Math.abs(val)===0) continue;
-      rows.push({ _id:`imp_${uid()}`, importTipo:"cartao", data:dt, dataCompra:dt, descricao:desc, tipo:"despesa", valor:Math.abs(val), catId:guessCat(desc,"despesa"), parcelaInfo:parseInstallmentInfo(desc) });
-    }
-    return rows;
-  };
-  const parseBankCSV=(t)=>{
-    const rows=[];
-    const lines=t.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-    if(!lines.length) return rows;
-    const sep=detectSep(lines.find(l=>/[;,\t|]/.test(l))||lines[0]);
-    const headerLineIndex=lines.findIndex(line=>{
-      const cells=parseDelimitedLine(line,sep).map(h=>normText(h));
-      return cells.some(h=>/data|date/.test(h)) && cells.some(h=>/valor|debito|credito|amount|saldo|vlr/.test(h));
-    });
-    const first=parseDelimitedLine(lines[headerLineIndex>=0?headerLineIndex:0],sep).map(h=>normText(h));
-    const hasHeader=headerLineIndex>=0 || first.some(h=>/data|hist|descri|lancamento|valor|debito|credito|saldo/.test(h));
-    const hdr=hasHeader?first:[];
-    const dI=hdr.findIndex(h=>/data|date/.test(h));
-    const descCandidates=hdr.map((h,i)=>({h,i})).filter(x=>/descri|historico|hist|memo|lancamento|detalhe|documento/.test(x.h)).map(x=>x.i);
-    const vI=hdr.findIndex(h=>/^valor$|amount|valor\s*lan|valor\s*mov|vlr/.test(h));
-    const debI=hdr.findIndex(h=>/debito|saida|retirada/.test(h));
-    const credI=hdr.findIndex(h=>/credito|entrada|deposito/.test(h));
-    const dcI=hdr.findIndex(h=>/^d\/?c$|debito\/?credito|tipo|natureza|sinal/.test(h));
-    const start=hasHeader?(headerLineIndex>=0?headerLineIndex+1:1):0;
-    for(let i=start;i<lines.length;i++){
-      const cols=parseDelimitedLine(lines[i],sep);
-      const dtIndex=dI>=0?dI:cols.findIndex(c=>pDate(c));
-      const dt=pDate(cols[dtIndex]);
-      if(!dt) continue;
-      let desc="";
-      if(descCandidates.length){ desc=descCandidates.map(idx=>cols[idx]).filter(Boolean).join(" · "); }
-      else { desc=cols.filter((_,idx)=>idx!==dtIndex).slice(0, Math.max(1, cols.length-2)).join(" "); }
-      desc=String(desc||"Lançamento bancário").replace(/\s+/g," ").trim();
-      if(isBalanceOrTotalRow(desc)||ignoredBankImportReason(desc)) continue;
-      let signed=null;
-      if(debI>=0||credI>=0){
-        const deb=debI>=0?pSignedVal(cols[debI],"D"):null;
-        const cred=credI>=0?pSignedVal(cols[credI],"C"):null;
-        if(deb!==null&&Math.abs(deb)>0) signed=-Math.abs(deb);
-        else if(cred!==null&&Math.abs(cred)>0) signed=Math.abs(cred);
-      }
-      if(signed===null&&vI>=0) signed=pSignedVal(cols[vI], dcI>=0?cols[dcI]:"");
-      if(signed===null){
-        for(let j=cols.length-1;j>=0;j--){
-          if(j===dtIndex) continue;
-          const v=pSignedVal(cols[j], dcI>=0?cols[dcI]:"");
-          if(v!==null&&Math.abs(v)>0){ signed=v; break; }
-        }
-      }
-      if(signed===null||Math.abs(signed)===0) continue;
-      const tipo=signed>=0?"receita":"despesa";
-      rows.push({ _id:`imp_${uid()}`, importTipo:"bancario", bancoImportacao:impBanco, data:dt, descricao:desc, tipo, valor:Math.abs(signed), catId:guessCat(desc,tipo), contaId:impContaId });
-    }
-    return rows;
-  };
-  const parseBankTXT=(t)=>{
-    const rows=[];
-    const lines=t.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-    lines.forEach(line=>{
-      const dm=line.match(/(\d{2}\/\d{2}\/\d{2,4}|\d{2}-\d{2}-\d{2,4}|\d{8})/);
-      if(!dm) return;
-      const dt=pDate(dm[1]);
-      if(!dt) return;
-      const moneyMatches=[...line.matchAll(/(?:^|\s)(-?\(?\d{1,3}(?:\.\d{3})*,\d{2}\)?\s*[CDcd]?|-?\d+,\d{2}\s*[CDcd]?)(?=\s|$)/g)];
-      if(!moneyMatches.length) return;
-      const moneyRaw=moneyMatches[moneyMatches.length-1][1];
-      const signed=pSignedVal(moneyRaw,line);
-      if(signed===null||Math.abs(signed)===0) return;
-      let desc=line.replace(dm[1],"").replace(moneyRaw,"").replace(/\s+/g," ").trim();
-      desc=desc.replace(/\b[CDcd]\b\s*$/," ").trim() || "Lançamento bancário";
-      if(isBalanceOrTotalRow(desc)||ignoredBankImportReason(desc)) return;
-      const tipo=signed>=0?"receita":"despesa";
-      rows.push({ _id:`imp_${uid()}`, importTipo:"bancario", bancoImportacao:impBanco, data:dt, descricao:desc, tipo, valor:Math.abs(signed), catId:guessCat(desc,tipo), contaId:impContaId });
-    });
-    return rows;
-  };
-  const parseBankFile=(t,ext)=>{
-    if(ext==="ofx"||ext==="qfx"||t.includes("<STMTTRN>")) return parseOFX(t,{ mode:"bancario" });
-    const csvRows=parseBankCSV(t);
-    if(csvRows.length) return csvRows;
-    return parseBankTXT(t);
-  };
-  const extractIgnoredBankRows=(text)=>{
-    if(impMode!=="bancario") return [];
-    const lines=String(text||"").split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-    return lines
-      .map((line,idx)=>({ id:`ign_${idx}_${uid()}`, linha:idx+1, descricao:line.replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim(), motivo:ignoredBankImportReason(line) }))
-      .filter(item=>item.motivo);
-  };
   const handleFile=(file)=>{
     if(!file) return;
     if(impMode==="cartao"&&!impCId){ setImpErr("Selecione o cartão antes de carregar o arquivo."); return; }
@@ -2594,15 +2255,15 @@ export default function App() {
 
     const processText=(t,ext)=>{
       let rows=[];
-      const ignoredRows = extractIgnoredBankRows(t);
+      const ignoredRows = extractIgnoredBankRows(t, { mode: impMode, createId: uid });
       setImpIgnored(ignoredRows);
       try{
-        if(impMode==="vale") rows=parseValePluxeeText(t);
-        else if(impMode==="bancario") rows=parseBankFile(t,ext);
-        else if(ext==="ofx"||ext==="qfx"||t.includes("<STMTTRN>")) rows=parseOFX(t,{ mode:"cartao" });
-        else rows=parseCardCSV(t);
+        if(impMode==="vale") rows=parseValePluxeeText(t, { valeYear: impValeYear, contaId: impContaId, categorize: categorizeImportRow, createId: uid });
+        else if(impMode==="bancario") rows=parseBankFile(t, ext, { bancoImportacao: impBanco, contaId: impContaId, categorize: categorizeImportRow, createId: uid });
+        else if(ext==="ofx"||ext==="qfx"||t.includes("<STMTTRN>")) rows=parseOFX(t, { mode:"cartao", bancoImportacao: impBanco, categorize: categorizeImportRow, createId: uid });
+        else rows=parseCardCSV(t, { categorize: categorizeImportRow, createId: uid });
       }catch(err){ setImpErr("Erro: "+err.message); return; }
-      rows=expandImportedRows(rows);
+      rows=expandImportedRows(rows, { impCompetencia, createId: uid });
       if(!rows.length){ setImpErr(ignoredRows.length ? `Nenhuma transação importável encontrada. ${ignoredRows.length} linha(s) foram ignoradas por regra de importação.` : "Nenhuma transação encontrada."); return; }
       const exactKeys=impMode!=="cartao"
         ? new Set(trans.filter(t2=>t2.contaId===impContaId&&t2.origem!=="cartao").map(t2=>buildImportKey({ ...t2, importTipo:impMode }, t2.contaId, mKey(t2.data), impMode)))
@@ -3573,7 +3234,7 @@ export default function App() {
                   <div><div style={lbl}>Categoria</div><CategorySelect cats={cats} value={simForm.catId} onChange={v=>setSimForm(f=>({...f,catId:v}))} validationInfo={requiredModal} fieldKey="simCatId"/></div>
                   <div><div style={lbl}>Modo</div><select style={inp} value={simForm.modoParc} onChange={e=>setSimForm(f=>({...f,modoParc:e.target.value}))}><option value="total">Valor total</option><option value="parcela">Vlr parcela</option></select></div>
                   <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inputStyle("simValor")} value={simForm.valor||""} onChange={value=>setSimForm(f=>({...f,valor:value}))}/></div>
-                  <div><div style={lbl}>Parcelas</div><input style={inputStyle("simParcelas")} type="number" min={1} max={48} placeholder="Ex: 1" value={simForm.parcelas ?? ""} onChange={e=>setSimForm(f=>({...f,parcelas:e.target.value}))}/></div>
+                  <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={1} max={48} value={simForm.parcelas||1} onChange={e=>setSimForm(f=>({...f,parcelas:e.target.value}))}/></div>
                   <div><div style={lbl}>Data 1ª</div><DateInput style={inputStyle("simData")} value={simForm.data||""} onChange={value=>setSimForm(f=>({...f,data:value}))}/></div>
                   <div><div style={lbl}>Competência 1ª fatura (opcional)</div><input style={inp} type="month" value={simForm.faturaCompetencia||""} onChange={e=>setSimForm(f=>({...f,faturaCompetencia:e.target.value}))}/><div style={{ fontSize:10, color:C.soft, marginTop:3 }}>{simForm.data&&simForm.cartaoId?`Automática: ${resolveCardCompetencia(simForm.data, simForm.cartaoId)}`:"Calculada pelo fechamento se vazio."}</div></div>
                 </div>
@@ -3779,7 +3440,7 @@ export default function App() {
                   {isCartao&&form.tipo==="despesa"&&(
                     <div style={{ background:C.navy, borderRadius:9, padding:"11px 13px" }}>
                       <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, cursor:"pointer", marginBottom:form.parcelado?11:0 }}>
-                        <input type="checkbox" checked={!!form.parcelado} onChange={e=>setForm(f=>({...f,parcelado:e.target.checked,parcelas:""}))}/>
+                        <input type="checkbox" checked={!!form.parcelado} onChange={e=>setForm(f=>({...f,parcelado:e.target.checked}))}/>
                         <span style={{ fontWeight:600 }}>Compra parcelada</span>
                       </label>
                       {form.parcelado&&(
@@ -3794,10 +3455,10 @@ export default function App() {
                             ))}
                           </div>
                           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
-                            <div><div style={lbl}>Parcelas</div><input style={inputStyle("parcelas")} type="number" min={2} max={48} placeholder="Ex: 3" value={form.parcelas ?? ""} onChange={e=>setForm(f=>({...f,parcelas:e.target.value}))}/></div>
+                            <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={2} max={48} value={form.parcelas||2} onChange={e=>setForm(f=>({...f,parcelas:e.target.value}))}/></div>
                             <div><div style={lbl}>Data 1ª parcela</div><DateInput style={inputStyle("data")} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
                           </div>
-                          {form.valor&&Number.isFinite(parseInt(form.parcelas, 10))&&parseInt(form.parcelas, 10)>=2&&(
+                          {form.valor&&form.parcelas&&(
                             <div style={{ marginTop:7, fontSize:12, color:C.soft }}>
                               {form.modoParc==="total"
                                 ?`${form.parcelas}× de ${fmtBRL(moneyToNumber(form.valor)/parseInt(form.parcelas))}`
