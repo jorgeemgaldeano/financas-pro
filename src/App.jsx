@@ -13,7 +13,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.15.2";
+const APP_VERSION = "0.3.16.1";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -268,6 +268,35 @@ const valorRealizado = (t) => {
 const saldoPendente = (t) => Math.max(0, (Number(t.valor) || 0) - (Number(t.valorPago) || 0));
 
 const invoiceIdFor = (cardId, monthKey) => `inv_${cardId}_${monthKey}`;
+const getCardPaymentAccountId = (card, fallback = null) => card?.contaPagamentoId || card?.accountId || fallback || null;
+const invoiceStatusByPayment = (paidAmount, totalAmount) => {
+  const paid = Number(paidAmount) || 0;
+  const total = Number(totalAmount) || 0;
+  if (total > 0 && paid >= total) return "paga";
+  if (paid > 0) return "parcialmente_paga";
+  return "fechada";
+};
+const paymentStatusByPaidAmount = (paidAmount, totalAmount) => {
+  const paid = Number(paidAmount) || 0;
+  const total = Number(totalAmount) || 0;
+  if (total > 0 && paid >= total) return "pago";
+  if (paid > 0) return "parcial";
+  return "previsto";
+};
+const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+const invoicePaymentLabel = (paidAmount, totalAmount) => {
+  const paid = roundMoney(paidAmount);
+  const total = roundMoney(totalAmount);
+  if (total <= 0) return "Sem valor";
+  if (paid >= total) return "Paga";
+  if (paid > 0) return "Paga parcialmente";
+  return "Pendente de pagamento";
+};
+const invoiceClosureLabel = (closureStatus) => {
+  if (closureStatus === "manual") return "Fechada manualmente";
+  if (closureStatus === "automatic") return "Fechada automaticamente";
+  return "Aberta";
+};
 
 const isInvoiceClosed = (faturas, cardId, monthKey) => {
   return Array.isArray(faturas) && faturas.some(f =>
@@ -1417,7 +1446,7 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                     <div key={field.f}><div style={lbl2}>{field.l}</div>
                       {field.f==="limite" ? <MoneyInput style={inp2} value={(c[field.f]||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})} onChange={value=>setCards(p=>p.map(x=>x.id===c.id?{...x,[field.f]:moneyToNumber(value)}:x))}/> : <input style={inp2} type={field.t||"text"} value={c[field.f]} onChange={e=>setCards(p=>p.map(x=>x.id===c.id?{...x,[field.f]:field.t==="number"?parseInt(e.target.value)||0:e.target.value}:x))}/>}</div>
                   ))}
-                  <div><div style={lbl2}>Conta para pagamento da fatura</div><select style={inp2} value={c.contaPagamentoId||c.accountId||""} onChange={e=>setCards(p=>p.map(x=>x.id===c.id?{...x,contaPagamentoId:e.target.value}:x))}><option value="">Selecione</option>{contas.filter(ct=>ct.tipo==="corrente").map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}</select></div>
+                  <div><div style={lbl2}>Conta para pagamento da fatura</div><select style={inp2} value={getCardPaymentAccountId(c)||""} onChange={e=>setCards(p=>p.map(x=>x.id===c.id?{...x,contaPagamentoId:e.target.value,accountId:e.target.value}:x))}><option value="">Selecione</option>{contas.filter(ct=>ct.tipo==="corrente").map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}</select></div>
                   <div><div style={lbl2}>Cor</div>
                     <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:4 }}>
                       {["#7C3AED","#E8504A","#00A878","#F5B700","#0891B2","#DB2777","#6366F1","#F97316","#84CC16","#B0BEC5"].map(cor=>(
@@ -1436,7 +1465,7 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                     <div style={{ width:38, height:24, borderRadius:6, background:c.cor, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700 }}>{c.nome.slice(0,2).toUpperCase()}</div>
                     <div>
                       <div style={{ fontWeight:700 }}>{c.nome}</div>
-                      <div style={{ fontSize:12, color:C.soft }}>Limite: {fmtBRL(c.limite)} · Fecha dia {c.fechamento} · Vence dia {c.vencimento} · Conta: {contas.find(ct=>ct.id===(c.contaPagamentoId||c.accountId))?.nome||"não definida"}</div>
+                      <div style={{ fontSize:12, color:C.soft }}>Limite: {fmtBRL(c.limite)} · Fecha dia {c.fechamento} · Vence dia {c.vencimento} · Conta: {contas.find(ct=>ct.id===getCardPaymentAccountId(c))?.nome||"não definida"}</div>
                     </div>
                   </div>
                   <button onClick={()=>setEditCardId(c.id)} style={ghost2()}>Editar</button>
@@ -1652,9 +1681,12 @@ export default function App() {
 
   useEffect(() => {
     const primeiraCC = contas.find(c => c.tipo === "corrente")?.id || contas[0]?.id || "cc1";
-    const precisaMigrar = cards.some(c => !c.contaPagamentoId);
+    const precisaMigrar = cards.some(c => !c.contaPagamentoId || !c.accountId);
     if (precisaMigrar) {
-      setCards(prev => prev.map(c => ({ ...c, contaPagamentoId: c.contaPagamentoId || c.accountId || primeiraCC })));
+      setCards(prev => prev.map(c => {
+        const contaAssociada = getCardPaymentAccountId(c, primeiraCC);
+        return { ...c, contaPagamentoId: contaAssociada, accountId: contaAssociada };
+      }));
     }
   }, [cards, contas, setCards]);
 
@@ -1736,17 +1768,38 @@ export default function App() {
   const cardTotals = useMemo(()=>cards.map(c=>{
     const fat = calcularFaturaCartao(c, selMonth);
     const gastoSim = simTrans.filter(t=>t.cartaoId===c.id&&transMonthKey(t)===selMonth).reduce((s,t)=>s+t.valor,0);
-    const contaPag = contas.find(ct => ct.id === (c.contaPagamentoId || c.accountId));
+    const contaPag = contas.find(ct => ct.id === getCardPaymentAccountId(c));
+    const invoiceId = invoiceIdFor(c.id, selMonth);
+    const invoiceRecord = faturas.find(f => f.id === invoiceId || (f.cardId === c.id && (f.competenceMonth || f.competencia || f.faturaMes) === selMonth));
+    const paymentRecord = invoiceRecord?.paymentTransactionId
+      ? trans.find(t => t.id === invoiceRecord.paymentTransactionId)
+      : trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao");
+    const totalFatura = roundMoney(Number(invoiceRecord?.finalAmount) || fat.total);
+    const valorPagoFatura = roundMoney(Number(paymentRecord?.valorPago) || Number(invoiceRecord?.paidAmount) || 0);
+    const valorPendenteFatura = Math.max(0, roundMoney(totalFatura - valorPagoFatura));
+    const fechamentoData = dateForMonthDay(selMonth, c.fechamento);
+    const hoje = new Date().toISOString().slice(0, 10);
+    const fechamentoTipo = invoiceRecord
+      ? (invoiceRecord.closureType || invoiceRecord.fechamentoTipo || invoiceRecord.closedBy || "manual")
+      : (hoje > fechamentoData ? "automatic" : "open");
     return {
       ...c,
       ...fat,
       gasto: fat.total,
       gastoSim,
       contaPagamentoNome: contaPag?.nome || "Conta não definida",
+      invoiceRecord,
+      paymentRecord,
+      invoiceClosureStatus: fechamentoTipo,
+      invoiceClosureLabel: invoiceClosureLabel(fechamentoTipo),
+      invoicePaymentStatusLabel: invoicePaymentLabel(valorPagoFatura, totalFatura),
+      invoiceTotal: totalFatura,
+      invoicePaidAmount: valorPagoFatura,
+      invoicePendingAmount: valorPendenteFatura,
       get disponivel(){ return c.limite-this.gasto; },
       get dispComSim(){ return c.limite-this.gasto-this.gastoSim; },
     };
-  }),[cards,contas,calcularFaturaCartao,simTrans,selMonth]);
+  }),[cards,contas,calcularFaturaCartao,simTrans,selMonth,faturas,trans]);
 
   const projections = useMemo(()=>{ const fix=trans.filter(t=>t.fixo&&t.tipo==="despesa"); const fixM=[...new Set(fix.map(t=>transMonthKey(t)))]; const fixV=fixM.length?fix.reduce((s,t)=>s+t.valor,0)/fixM.length:0; const vari=trans.filter(t=>!t.fixo&&t.tipo==="despesa"); const varM=[...new Set(vari.map(t=>transMonthKey(t)))]; const varV=varM.length?vari.reduce((s,t)=>s+t.valor,0)/varM.length:0; return Array.from({length:params.mesesProjecao},(_,i)=>{ const dt=new Date(Y,M+1+i,1); return { label:`${MONTHS[dt.getMonth()]}/${dt.getFullYear()}`, value:fixV+varV, fixo:fixV, variavel:varV }; }); },[trans,params.mesesProjecao]);
 
@@ -1861,7 +1914,7 @@ export default function App() {
   const addCard=()=>{
     if(!requireField(Boolean(form.nome?.trim()), "Nome do cartão", "cardNome")) return;
     if(!requireField(Boolean(form.contaPagamentoId), "Conta corrente para pagamento da fatura", "cardContaPagamentoId")) return;
-    setCards(p=>[...p,{ ...form, id:uid(), limite:moneyToNumber(form.limite)||1000, fechamento:parseInt(form.fechamento)||10, vencimento:parseInt(form.vencimento)||5, cor:form.cor||"#00A878", contaPagamentoId:form.contaPagamentoId }]);
+    setCards(p=>[...p,{ ...form, id:uid(), limite:moneyToNumber(form.limite)||1000, fechamento:parseInt(form.fechamento)||10, vencimento:parseInt(form.vencimento)||5, cor:form.cor||"#00A878", contaPagamentoId:form.contaPagamentoId, accountId:form.contaPagamentoId }]);
     closeModal();
   };
   const delTrans=(id)=>setTrans(p=>p.filter(t=>t.id!==id));
@@ -1954,15 +2007,38 @@ export default function App() {
   };
 
   const baixarTrans = (id, valor=null) => {
-    setTrans(prev => prev.map(t => {
-      if (t.id !== id) return t;
-      const total = Number(t.valor) || 0;
-      const atual = Number(t.valorPago) || 0;
-      const entrada = valor === null ? total - atual : moneyToNumber(valor);
-      if (entrada <= 0) return t;
-      const novoPago = Math.min(total, atual + entrada);
-      return { ...t, valorPago: novoPago, status: novoPago >= total ? "pago" : "parcial" };
-    }));
+    const alvo = trans.find(t => t.id === id);
+    if (!alvo) return;
+
+    const invoiceAlvo = alvo.invoiceId ? faturas.find(f => f.id === alvo.invoiceId) : null;
+    const total = roundMoney(Number(alvo.valor) || Number(invoiceAlvo?.finalAmount) || ((Number(alvo.valorPago) || 0) + (Number(alvo.pendingAmount) || 0)));
+    const atual = roundMoney(Number(alvo.valorPago) || 0);
+    const entrada = valor === null ? total - atual : moneyToNumber(valor);
+    if (entrada <= 0 || total <= 0) return;
+
+    const novoPago = Math.min(total, roundMoney(atual + entrada));
+    const novoStatus = paymentStatusByPaidAmount(novoPago, total);
+
+    setTrans(prev => prev.map(t => t.id === id ? {
+      ...t,
+      valor: total,
+      valorPago: novoPago,
+      pendingAmount: Math.max(0, roundMoney(total - novoPago)),
+      status: novoStatus,
+      updatedAt: new Date().toISOString()
+    } : t));
+
+    if (alvo.natureza === "fatura_cartao" && alvo.invoiceId) {
+      setFaturas(prev => prev.map(f => f.id === alvo.invoiceId ? {
+        ...f,
+        finalAmount: total,
+        paidAmount: novoPago,
+        pendingAmount: Math.max(0, roundMoney(total - novoPago)),
+        status: invoiceStatusByPayment(novoPago, total),
+        paymentTransactionId: alvo.id,
+        updatedAt: new Date().toISOString(),
+      } : f));
+    }
   };
 
   const baixarParcialTrans = (id) => {
@@ -2003,46 +2079,76 @@ export default function App() {
   const fecharFaturaCartao = (cardId) => {
     const card = cards.find(c => c.id === cardId);
     if (!card) return;
-    const contaPagamentoId = card.contaPagamentoId || card.accountId || primeiraContaCorrenteId;
+    const contaPagamentoId = getCardPaymentAccountId(card, primeiraContaCorrenteId);
     if (!contaPagamentoId) { alert("Cartão sem conta corrente associada."); return; }
     const fat = calcularFaturaCartao(card, selMonth);
-    if (fat.total <= 0) { alert("Não há valor de fatura para fechar neste mês."); return; }
+    const totalFatura = roundMoney(fat.total);
+    if (totalFatura <= 0) { alert("Não há valor de fatura para fechar neste mês."); return; }
 
     const invoiceId = invoiceIdFor(cardId, selMonth);
     const paymentMonth = monthOffset(selMonth, 1);
     const paymentDate = dateForMonthDay(paymentMonth, card.vencimento);
     const existingPayment = trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao");
+    const paymentTransactionId = existingPayment?.id || uid();
 
     if (existingPayment) {
       const atualizar = window.confirm("Esta fatura já possui pagamento previsto. Deseja atualizar o valor previsto mantendo as baixas já feitas?");
       if (!atualizar) return;
-      setTrans(prev => prev.map(t => t.id === existingPayment.id ? { ...t, valor: fat.total, data: paymentDate, competencia: paymentMonth, contaId: contaPagamentoId, status: (Number(t.valorPago)||0) >= fat.total ? "pago" : ((Number(t.valorPago)||0) > 0 ? "parcial" : "previsto") } : t));
+      setTrans(prev => prev.map(t => t.id === existingPayment.id ? {
+        ...t,
+        valor: totalFatura,
+        data: paymentDate,
+        competencia: paymentMonth,
+        contaId: contaPagamentoId,
+        accountId: contaPagamentoId,
+        status: paymentStatusByPaidAmount(t.valorPago, totalFatura),
+        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago) || 0))),
+        updatedAt: new Date().toISOString(),
+      } : t));
     } else {
       setTrans(prev => [...prev, {
-        id: uid(),
+        id: paymentTransactionId,
         tipo: "despesa",
         origem: "corrente",
         natureza: "fatura_cartao",
         catId: "cat10",
         descricao: `Pagamento fatura ${card.nome} - ${selMonth}`,
-        valor: fat.total,
+        valor: totalFatura,
         data: paymentDate,
         competencia: paymentMonth,
         contaId: contaPagamentoId,
+        accountId: contaPagamentoId,
         cartaoId: cardId,
         invoiceId,
         faturaMes: selMonth,
         status: "previsto",
         valorPago: 0,
+        pendingAmount: totalFatura,
         fixo: false,
       }]);
     }
 
     setFaturas(prev => {
+      const valorPagoAtual = roundMoney(Number(existingPayment?.valorPago) || 0);
       const nova = {
-        id: invoiceId, cardId, accountId: contaPagamentoId, competenceMonth: selMonth, dueMonth: paymentMonth,
-        status: "fechada", expensesTotal: fat.total - fat.ajustes, adjustmentsTotal: fat.ajustes, finalAmount: fat.total,
-        closedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        id: invoiceId,
+        cardId,
+        accountId: contaPagamentoId,
+        contaPagamentoId,
+        competenceMonth: selMonth,
+        dueMonth: paymentMonth,
+        status: invoiceStatusByPayment(valorPagoAtual, totalFatura),
+        expensesTotal: roundMoney(totalFatura - fat.ajustes),
+        adjustmentsTotal: roundMoney(fat.ajustes),
+        finalAmount: totalFatura,
+        paidAmount: valorPagoAtual,
+        pendingAmount: Math.max(0, roundMoney(totalFatura - valorPagoAtual)),
+        paymentTransactionId,
+        closureType: "manual",
+        fechamentoTipo: "manual",
+        closedBy: "manual",
+        closedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       return prev.some(f => f.id === invoiceId) ? prev.map(f => f.id === invoiceId ? { ...f, ...nova } : f) : [...prev, nova];
     });
@@ -2924,7 +3030,7 @@ export default function App() {
         {/* CARTÕES */}
         {tab==="cartoes"&&(
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <div style={{ display:"flex", justifyContent:"flex-end" }}><button onClick={()=>{ setModal("addCard"); setForm({ cor:"#00A878", contaPagamentoId:primeiraContaCorrenteId }); }} style={btn(C.emerald)}>+ Adicionar Cartão</button></div>
+            <div style={{ display:"flex", justifyContent:"flex-end" }}><button onClick={()=>{ setModal("addCard"); setForm({ cor:"#00A878", contaPagamentoId:primeiraContaCorrenteId, accountId:primeiraContaCorrenteId }); }} style={btn(C.emerald)}>+ Adicionar Cartão</button></div>
             {cardTotals.map(c=>{ const fatura=dateForMonthDay(selMonth,c.fechamento); const venc=dateForMonthDay(monthOffset(selMonth,1),c.vencimento); const tc=monthTrans.filter(t=>t.cartaoId===c.id&&t.origem==="cartao"); const aberto = expandedCards[c.id] ?? true; return (
               <div key={c.id} style={card()}>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
@@ -2940,9 +3046,18 @@ export default function App() {
                 {aberto&&<>
                 <div style={{ background:C.border, borderRadius:5, height:6, marginBottom:6 }}><div style={{ height:6, borderRadius:5, width:`${Math.min(100,(c.gasto/c.limite)*100)}%`, background:c.gasto/c.limite>params.alertaLimite/100?C.coral:c.cor }}/></div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.soft, marginBottom:14 }}><span>{((c.gasto/c.limite)*100).toFixed(0)}% utilizado</span><span>Disponível: {fmtBRL(c.disponivel)}</span></div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9, marginBottom:14 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:9, marginBottom:14 }}>
                   <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px" }}><div style={lbl}>Fechamento</div><div style={{ fontWeight:700 }}>{fmtDate(fatura)}</div></div>
                   <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px" }}><div style={lbl}>Vencimento previsto</div><div style={{ fontWeight:700 }}>{fmtDate(venc)}</div></div>
+                  <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px", border:`1px solid ${c.invoiceClosureStatus==="open"?C.emerald:C.gold}55` }}>
+                    <div style={lbl}>Situação da fatura</div>
+                    <div style={{ fontWeight:800, color:c.invoiceClosureStatus==="open"?C.emerald:C.gold }}>{c.invoiceClosureLabel}</div>
+                  </div>
+                  <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px", border:`1px solid ${c.invoicePaidAmount>=c.invoiceTotal&&c.invoiceTotal>0?C.emerald:c.invoicePaidAmount>0?C.gold:C.coral}55` }}>
+                    <div style={lbl}>Pagamento</div>
+                    <div style={{ fontWeight:800, color:c.invoicePaidAmount>=c.invoiceTotal&&c.invoiceTotal>0?C.emerald:c.invoicePaidAmount>0?C.gold:C.coral }}>{c.invoicePaymentStatusLabel}</div>
+                    <div style={{ fontSize:10, color:C.soft, marginTop:3 }}>Pago {fmtBRL(c.invoicePaidAmount)} · Pendente {fmtBRL(c.invoicePendingAmount)}</div>
+                  </div>
                 </div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
                   <button onClick={()=>adicionarAjusteFatura(c.id,"acrescimo")} style={btn(C.gold,{ color:C.navy, fontSize:12, padding:"6px 12px" })}>+ Ajuste fatura</button>
@@ -3593,7 +3708,7 @@ export default function App() {
                     <div><div style={lbl}>Dia Fechamento</div><input style={inp} type="number" min={1} max={31} value={form.fechamento||""} onChange={e=>setForm(f=>({...f,fechamento:e.target.value}))}/></div>
                     <div><div style={lbl}>Dia Vencimento</div><input style={inp} type="number" min={1} max={31} value={form.vencimento||""} onChange={e=>setForm(f=>({...f,vencimento:e.target.value}))}/></div>
                   </div>
-                  <div><div style={lbl}>Conta corrente para pagamento da fatura</div><select style={inputStyle("cardContaPagamentoId")} value={form.contaPagamentoId||""} onChange={e=>setForm(f=>({...f,contaPagamentoId:e.target.value}))}><option value="">Selecione a conta</option>{contasCorrentes.map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}</select></div>
+                  <div><div style={lbl}>Conta corrente para pagamento da fatura</div><select style={inputStyle("cardContaPagamentoId")} value={form.contaPagamentoId||""} onChange={e=>setForm(f=>({...f,contaPagamentoId:e.target.value,accountId:e.target.value}))}><option value="">Selecione a conta</option>{contasCorrentes.map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}</select></div>
                   <div><div style={lbl}>Cor</div><div style={{ display:"flex", gap:7, flexWrap:"wrap", marginTop:4 }}>{["#7C3AED","#E8504A","#00A878","#F5B700","#0891B2","#DB2777","#6366F1","#F97316","#84CC16","#B0BEC5"].map(cor=><div key={cor} onClick={()=>setForm(f=>({...f,cor}))} style={{ width:24, height:24, borderRadius:5, background:cor, cursor:"pointer", border:form.cor===cor?"2px solid #fff":"2px solid transparent" }}/>)}</div></div>
                 </div>
                 <div style={{ display:"flex", gap:9, marginTop:16 }}>
