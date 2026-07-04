@@ -8,12 +8,13 @@ import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } fro
 import { useLS, lsSave } from "./hooks/useLocalStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset } from "./utils/dateUtils.js";
+import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.16.2";
+const APP_VERSION = "0.3.17";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -267,23 +268,6 @@ const valorRealizado = (t) => {
 
 const saldoPendente = (t) => Math.max(0, (Number(t.valor) || 0) - (Number(t.valorPago) || 0));
 
-const invoiceIdFor = (cardId, monthKey) => `inv_${cardId}_${monthKey}`;
-const getCardPaymentAccountId = (card, fallback = null) => card?.contaPagamentoId || card?.accountId || fallback || null;
-const invoiceStatusByPayment = (paidAmount, totalAmount) => {
-  const paid = Number(paidAmount) || 0;
-  const total = Number(totalAmount) || 0;
-  if (total > 0 && paid >= total) return "paga";
-  if (paid > 0) return "parcialmente_paga";
-  return "fechada";
-};
-const paymentStatusByPaidAmount = (paidAmount, totalAmount) => {
-  const paid = Number(paidAmount) || 0;
-  const total = Number(totalAmount) || 0;
-  if (total > 0 && paid >= total) return "pago";
-  if (paid > 0) return "parcial";
-  return "previsto";
-};
-const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const valorExibicaoLancamento = (t) => roundMoney(Number(t?.valor) || Number(t?.amount) || valorRealizado(t));
 const safeMoneyAmount = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -293,66 +277,6 @@ const getSimulationInstallmentValue = (sim) => {
   const parcelas = Math.max(1, parseInt(sim?.parcelas, 10) || 1);
   const valorBase = safeMoneyAmount(sim?.valor);
   return roundMoney(sim?.modoParc === "total" ? valorBase / parcelas : valorBase);
-};
-const invoicePaymentLabel = (paidAmount, totalAmount) => {
-  const paid = roundMoney(paidAmount);
-  const total = roundMoney(totalAmount);
-  if (total <= 0) return "Sem valor";
-  if (paid >= total) return "Paga";
-  if (paid > 0) return "Paga parcialmente";
-  return "Pendente de pagamento";
-};
-const invoiceClosureLabel = (closureStatus) => {
-  if (closureStatus === "manual") return "Fechada manualmente";
-  if (closureStatus === "automatic") return "Fechada automaticamente";
-  return "Aberta";
-};
-
-const CLOSED_INVOICE_STATUSES = ["fechada", "parcialmente_paga", "paga"];
-
-const getInvoiceRecordFor = (faturas, cardId, monthKey) => {
-  return Array.isArray(faturas)
-    ? faturas.find(f =>
-        f.cardId === cardId &&
-        (f.competenceMonth || f.competencia || f.faturaMes) === monthKey
-      )
-    : null;
-};
-
-const getInvoiceClosureStatusForMonth = (faturas, card, monthKey, todayKey = new Date().toISOString().slice(0, 10)) => {
-  if (!card || !monthKey) return "open";
-  const invoiceRecord = getInvoiceRecordFor(faturas, card.id, monthKey);
-  if (invoiceRecord?.status === "aberta") return "open";
-  if (invoiceRecord && CLOSED_INVOICE_STATUSES.includes(invoiceRecord.status)) {
-    return invoiceRecord.closureType || invoiceRecord.fechamentoTipo || invoiceRecord.closedBy || "manual";
-  }
-  const fechamentoData = dateForMonthDay(monthKey, card.fechamento || card.closingDay || 31);
-  return todayKey > fechamentoData ? "automatic" : "open";
-};
-
-const isInvoiceClosed = (faturas, cardId, monthKey) => {
-  const invoiceRecord = getInvoiceRecordFor(faturas, cardId, monthKey);
-  return Boolean(invoiceRecord && CLOSED_INVOICE_STATUSES.includes(invoiceRecord.status));
-};
-
-const isInvoiceClosedForNewEntries = (faturas, card, monthKey) => {
-  return getInvoiceClosureStatusForMonth(faturas, card, monthKey) !== "open";
-};
-
-const getCardInvoiceCompetence = (dateKey, card, faturas = []) => {
-  if (!dateKey) return mKey(new Date().toISOString());
-  const baseMonth = mKey(dateKey);
-  if (!card) return baseMonth;
-  const day = parseInt(String(dateKey).slice(8, 10), 10) || 1;
-  const closingDay = parseInt(card.fechamento || card.closingDay || 31, 10) || 31;
-  return day <= closingDay ? baseMonth : monthOffset(baseMonth, 1);
-};
-
-const signedCardAmount = (t) => {
-  const v = Number(t.valor) || 0;
-  if (t.natureza === "ajuste_fatura_cartao" && t.ajusteFaturaTipo === "reducao") return -v;
-  if (t.tipo === "receita") return -v;
-  return v;
 };
 function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
   return (
@@ -446,15 +370,153 @@ function expandSim(sim, cards = [], faturas = []) {
   });
 }
 
-// ── CategorySelect
+// ── CategorySelect com autocomplete
 function CategorySelect({ cats, value, onChange, style, validationInfo, fieldKey = "catId" }) {
-  const flat=useMemo(()=>flattenCats(cats),[cats]);
-  const s=highlightIfRequired({ background:C.navy, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, padding:"8px 12px", fontSize:14, width:"100%", outline:"none", ...style }, validationInfo, fieldKey);
+  const flat = useMemo(() => flattenCats(cats), [cats]);
+  const selectableCats = useMemo(() => flat.filter(f => !f.hasSubs), [flat]);
+  const selected = useMemo(() => selectableCats.find(f => f.id === value) || null, [selectableCats, value]);
+  const [query, setQuery] = useState(selected?.path || "");
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    setQuery(selected?.path || "");
+  }, [selected?.path]);
+
+  const normalizeSearch = (text) => normText(String(text || ""));
+  const suggestions = useMemo(() => {
+    const q = normalizeSearch(query);
+    const source = q
+      ? selectableCats.filter(cat => normalizeSearch(cat.path).includes(q) || normalizeSearch(cat.nome).includes(q))
+      : selectableCats;
+    return source.slice(0, 12);
+  }, [query, selectableCats]);
+
+  const selectCategory = (cat) => {
+    if (!cat) return;
+    onChange(cat.id);
+    setQuery(cat.path);
+    setOpen(false);
+    setActiveIndex(0);
+  };
+
+  const baseStyle = highlightIfRequired({
+    background:C.navy,
+    border:`1px solid ${C.border}`,
+    borderRadius:8,
+    color:C.text,
+    padding:"8px 12px",
+    fontSize:14,
+    width:"100%",
+    outline:"none",
+    ...style
+  }, validationInfo, fieldKey);
+
+  const wrapperStyle = {
+    position:"relative",
+    width: style?.width || "100%",
+    minWidth: style?.width === "auto" ? 180 : undefined,
+  };
+
+  const finishEditing = () => {
+    const text = query.trim();
+    if (!text) {
+      onChange("");
+      setQuery("");
+      return;
+    }
+    const exact = selectableCats.find(cat => normalizeSearch(cat.path) === normalizeSearch(text) || normalizeSearch(cat.nome) === normalizeSearch(text));
+    if (exact) {
+      selectCategory(exact);
+      return;
+    }
+    setQuery(selected?.path || "");
+  };
+
   return (
-    <select style={s} value={value||""} onChange={e=>onChange(e.target.value)}>
-      <option value="">Selecione a categoria</option>
-      {flat.map(f=><option key={f.id} value={f.id} disabled={f.hasSubs}>{"  ".repeat(f.depth)}{f.depth>0?"└ ":""}{f.nome}{f.hasSubs?" ▸":""}</option>)}
-    </select>
+    <div style={wrapperStyle}>
+      <input
+        type="text"
+        value={query}
+        placeholder="Digite para buscar categoria"
+        style={baseStyle}
+        autoComplete="off"
+        onFocus={() => setOpen(true)}
+        onChange={e => {
+          const next = e.target.value;
+          setQuery(next);
+          setOpen(true);
+          setActiveIndex(0);
+          if (!next.trim()) onChange("");
+        }}
+        onKeyDown={e => {
+          if (!open && ["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) setOpen(true);
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActiveIndex(i => Math.min(i + 1, Math.max(0, suggestions.length - 1)));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActiveIndex(i => Math.max(i - 1, 0));
+          } else if (e.key === "Enter") {
+            if (open && suggestions[activeIndex]) {
+              e.preventDefault();
+              selectCategory(suggestions[activeIndex]);
+            }
+          } else if (e.key === "Escape") {
+            setOpen(false);
+            setQuery(selected?.path || "");
+          }
+        }}
+        onBlur={() => {
+          window.setTimeout(() => {
+            finishEditing();
+            setOpen(false);
+          }, 120);
+        }}
+      />
+      {open && (
+        <div style={{
+          position:"absolute",
+          top:"calc(100% + 4px)",
+          left:0,
+          right:0,
+          zIndex:50,
+          maxHeight:240,
+          overflowY:"auto",
+          background:C.surface,
+          border:`1px solid ${C.border}`,
+          borderRadius:8,
+          boxShadow:"0 12px 28px rgba(0,0,0,0.35)",
+        }}>
+          {suggestions.length > 0 ? suggestions.map((cat, idx) => (
+            <button
+              key={cat.id}
+              type="button"
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => selectCategory(cat)}
+              style={{
+                width:"100%",
+                textAlign:"left",
+                background:idx === activeIndex ? C.border : "transparent",
+                border:"none",
+                color:C.text,
+                padding:"8px 10px",
+                cursor:"pointer",
+                fontSize:12,
+                display:"flex",
+                alignItems:"center",
+                gap:8,
+              }}
+            >
+              <span>{cat.icon || catIcon(cats, cat.id)}</span>
+              <span style={{ flex:1 }}>{cat.path}</span>
+            </button>
+          )) : (
+            <div style={{ color:C.soft, fontSize:12, padding:"9px 10px" }}>Nenhuma categoria encontrada.</div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
