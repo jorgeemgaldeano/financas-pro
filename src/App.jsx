@@ -14,7 +14,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.17";
+const APP_VERSION = "0.3.17.4";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -333,12 +333,34 @@ function DonutChart({ segments, size=120 }) {
   );
 }
 
+
+// ── Simulation helpers ───────────────────────────────────────────────────────
+function safeMoneyAmount(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  return moneyToNumber(value);
+}
+
+function normalizeSimulationInstallments(value) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function getSimulationInstallmentValue(sim) {
+  const parcelas = normalizeSimulationInstallments(sim?.parcelas);
+  const valorBase = safeMoneyAmount(sim?.valor);
+  const valorParcela = sim?.modoParc === "total" ? valorBase / parcelas : valorBase;
+  return Math.round((Number(valorParcela) || 0) * 100) / 100;
+}
+
 // ── Sim expander
 function expandSim(sim, cards = [], faturas = []) {
   if (!sim?.data) return [];
+
   const n = Math.max(1, parseInt(sim.parcelas, 10) || 1);
   const card = cards.find(c => c.id === sim.cartaoId);
+
   const vp = getSimulationInstallmentValue(sim);
+
   const firstCompetence = sim.faturaCompetencia || getCardInvoiceCompetence(sim.data, card, faturas);
 
   return Array.from({ length:n }, (_, i) => {
@@ -2390,15 +2412,30 @@ export default function App() {
 
   // Simulation
   const addSim=()=>{
-    if(!requireField(Boolean(simForm.descricao?.trim()), "Descrição", "simDescricao")) return;
-    if(!requireField(moneyToNumber(simForm.valor)>0, "Valor", "simValor")) return;
+    const descricao = (simForm.descricao || "").trim();
+    const valor = safeMoneyAmount(simForm.valor);
+    const parcelas = normalizeSimulationInstallments(simForm.parcelas);
+
+    if(!requireField(Boolean(descricao), "Descrição", "simDescricao")) return;
+    if(!requireField(valor>0, "Valor", "simValor")) return;
     if(!requireField(Boolean(simForm.data), "Data da compra", "simData")) return;
     if(!requireField(Boolean(simForm.cartaoId), "Cartão", "simCartaoId")) return;
     if(!requireField(Boolean(simForm.catId), "Categoria", "simCatId")) return;
-    if(!requireField(Boolean(simForm.parcelas) && parseInt(simForm.parcelas, 10) >= 1, "Número de parcelas", "simParcelas")) return;
+    if(!requireField(Boolean(simForm.parcelas) && parcelas >= 1, "Número de parcelas", "simParcelas")) return;
+
     const competencia = resolveCardCompetencia(simForm.data, simForm.cartaoId, simForm.faturaCompetencia);
-    setSims(p=>[...p,{ ...simForm, id:"sim_"+uid(), valor:safeMoneyAmount(simForm.valor), parcelas:parseInt(simForm.parcelas, 10)||1, faturaCompetencia:competencia }]);
-    setSimForm(p=>({ modoParc:p.modoParc, parcelas:"", cartaoId:p.cartaoId, faturaCompetencia:"" }));
+    const novaSimulacao = {
+      ...simForm,
+      id:"sim_"+uid(),
+      descricao,
+      valor:roundMoney(valor),
+      parcelas,
+      faturaCompetencia:competencia,
+      createdAt:new Date().toISOString(),
+    };
+
+    setSims(prev=>[...(Array.isArray(prev)?prev:[]), novaSimulacao]);
+    setSimForm(p=>({ modoParc:p.modoParc || "total", parcelas:"", cartaoId:p.cartaoId, faturaCompetencia:"" }));
   };
   const delSim=(id)=>setSims(p=>p.filter(s=>s.id!==id));
   const refazerSim=(id)=>setSims(p=>p.map(s=>s.id===id?{...s, recalculatedAt:new Date().toISOString()}:s));
@@ -3605,7 +3642,7 @@ export default function App() {
                 </div>
                 <div style={{ marginTop:11 }}><button onClick={addSim} style={btn(C.gold,{ color:C.navy })}>＋ Adicionar</button></div>
               </div>
-              {sims.length>0&&<div style={card()}><div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Simulações salvas</div>{sims.map(s=>{ const c=cards.find(c=>c.id===s.cartaoId); const n=parseInt(s.parcelas)||1; const vp=getSimulationInstallmentValue(s); return (<div key={s.id} style={{ display:"flex", alignItems:"center", gap:9, background:C.navy, borderRadius:9, padding:"9px 13px", marginBottom:7, borderLeft:`3px solid ${C.gold}` }}><div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{s.descricao}</div><div style={{ fontSize:12, color:C.soft }}>{c?.nome} · impacto em {n} parcela{n>1?"s":""} · {n}× de {fmtBRL(vp)} · 1ª compra em {fmtDate(s.data)} · 1ª fatura {s.faturaCompetencia || resolveCardCompetencia(s.data, s.cartaoId)}{s.recalculatedAt?` · refeita em ${fmtDate(s.recalculatedAt.slice(0,10))}`:""}</div></div><span style={{ fontSize:10, background:getCatColor(s.catId)+"22", color:getCatColor(s.catId), padding:"2px 7px", borderRadius:20 }}>{getCatIcon(s.catId)} {getCatLabel(s.catId)}</span><button onClick={()=>refazerSim(s.id)} style={{ background:C.gold+"22", border:`1px solid ${C.gold}44`, borderRadius:5, color:C.gold, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Refazer</button><button onClick={()=>delSim(s.id)} style={{ background:C.coral+"22", border:`1px solid ${C.coral}44`, borderRadius:5, color:C.coral, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Excluir</button></div>); })}</div>}
+              {sims.length>0&&<div style={card()}><div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Simulações salvas</div>{sims.map(s=>{ const c=cards.find(c=>c.id===s.cartaoId); const n=normalizeSimulationInstallments(s.parcelas); const vp=getSimulationInstallmentValue(s); return (<div key={s.id} style={{ display:"flex", alignItems:"center", gap:9, background:C.navy, borderRadius:9, padding:"9px 13px", marginBottom:7, borderLeft:`3px solid ${C.gold}` }}><div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{s.descricao}</div><div style={{ fontSize:12, color:C.soft }}>{c?.nome} · impacto em {n} parcela{n>1?"s":""} · {n}× de {fmtBRL(vp)} · 1ª compra em {fmtDate(s.data)} · 1ª fatura {s.faturaCompetencia || resolveCardCompetencia(s.data, s.cartaoId)}{s.recalculatedAt?` · refeita em ${fmtDate(s.recalculatedAt.slice(0,10))}`:""}</div></div><span style={{ fontSize:10, background:getCatColor(s.catId)+"22", color:getCatColor(s.catId), padding:"2px 7px", borderRadius:20 }}>{getCatIcon(s.catId)} {getCatLabel(s.catId)}</span><button onClick={()=>refazerSim(s.id)} style={{ background:C.gold+"22", border:`1px solid ${C.gold}44`, borderRadius:5, color:C.gold, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Refazer</button><button onClick={()=>delSim(s.id)} style={{ background:C.coral+"22", border:`1px solid ${C.coral}44`, borderRadius:5, color:C.coral, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Excluir</button></div>); })}</div>}
               {sims.length>0&&cards.map(c=>{ const sc=sims.filter(s=>s.cartaoId===c.id); if(!sc.length) return null; return (
                 <div key={c.id} style={card()}>
                   <div style={{ fontWeight:700, fontSize:13, marginBottom:12 }}>{c.nome} — Impacto por competência de fatura</div>

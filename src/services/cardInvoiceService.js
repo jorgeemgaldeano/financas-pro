@@ -26,6 +26,21 @@ export const paymentStatusByPaidAmount = (paidAmount, totalAmount) => {
 
 export const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+const safeMoneyAmount = (value) => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  return moneyToNumber(value);
+};
+
+const getSimulationInstallmentValue = (sim) => {
+  const parcelas = Math.max(1, parseInt(sim?.parcelas, 10) || 1);
+  const valorBase = safeMoneyAmount(sim?.valor);
+
+  return roundMoney(sim?.modoParc === "total" ? valorBase / parcelas : valorBase);
+};
+
 export const invoicePaymentLabel = (paidAmount, totalAmount) => {
   const paid = roundMoney(paidAmount);
   const total = roundMoney(totalAmount);
