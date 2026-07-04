@@ -269,6 +269,15 @@ const valorRealizado = (t) => {
 const saldoPendente = (t) => Math.max(0, (Number(t.valor) || 0) - (Number(t.valorPago) || 0));
 
 const valorExibicaoLancamento = (t) => roundMoney(Number(t?.valor) || Number(t?.amount) || valorRealizado(t));
+const safeMoneyAmount = (value) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  return moneyToNumber(value);
+};
+const getSimulationInstallmentValue = (sim) => {
+  const parcelas = Math.max(1, parseInt(sim?.parcelas, 10) || 1);
+  const valorBase = safeMoneyAmount(sim?.valor);
+  return roundMoney(sim?.modoParc === "total" ? valorBase / parcelas : valorBase);
+};
 
 function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
   return (
