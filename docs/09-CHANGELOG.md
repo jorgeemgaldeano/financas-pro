@@ -5,6 +5,42 @@ Use este arquivo para registrar alterações relevantes do aplicativo.
 ## Modelo
 
 ```md
+## [0.3.11] - 2026-06-29
+
+### Adicionado
+
+- Criado `src/utils/moneyUtils.js` para centralizar `fmtBRL`, `moneyToNumber` e `maskMoneyInput`.
+- Criado `src/utils/dateUtils.js` para centralizar utilitários de data, mês e competência.
+- Criado `src/constants/storageKeys.js` para centralizar `LS_VERSION`, `LS_PREFIX`, `BACKUP_SCHEMA_VERSION` e `BACKUP_STORAGE_KEYS`.
+- Criado `src/hooks/useLocalStorage.js` para centralizar `lsGet`, `lsSave` e `useLS`.
+
+### Alterado
+
+- `src/App.jsx` passou a importar utilitários e constantes extraídos, reduzindo responsabilidades do arquivo principal.
+- `src/components/ui/DateInput.jsx` passou a reaproveitar funções de conversão e máscara de data de `dateUtils.js`.
+- Versão visual da aplicação atualizada para `v0.3.11`.
+
+### Corrigido
+
+- Não aplicável. Refatoração técnica sem alteração funcional intencional.
+
+### Removido
+
+- Não aplicável. Nenhuma funcionalidade foi removida.
+
+### Migração
+
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração de estrutura persistida.
+- Não houve alteração no formato interno de datas ou valores.
+
+### Testes
+
+- Validação sintática via TypeScript `transpileModule` executada sem diagnósticos nos arquivos alterados.
+- Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
+- Pendente checklist manual de regressão de valores, datas, backup/restauração e persistência após recarregar.
+
+
 ## [versão] - AAAA-MM-DD
 
 ### Adicionado
@@ -421,3 +457,146 @@ Use este arquivo para registrar alterações relevantes do aplicativo.
 
 - Revisão documental dos arquivos Markdown do projeto.
 - Pendente validação prática da diretriz na próxima alteração de código.
+
+## v0.3.12 — Correção da limpeza de dados financeiros
+
+### Corrigido
+
+- Corrigida a rotina **Apagar dados financeiros**, que não estava concluindo a limpeza de lançamentos, contas e cartões após a refatoração da v0.3.11.
+- O `App.jsx` voltou a importar explicitamente `lsSave` do hook `useLocalStorage.js`.
+- O `App.jsx` passou a importar explicitamente `LS_VERSION` de `storageKeys.js`, evitando referência indefinida na exportação de backup.
+
+### Causa provável
+
+Após a extração de `useLocalStorage.js`, a função `handleReset` continuou chamando `lsSave`, mas o `App.jsx` importava apenas `useLS`. Ao acionar o botão de limpeza, a execução era interrompida por referência indefinida antes de atualizar os estados e o LocalStorage.
+
+### Impacto em regra de negócio
+
+Sem alteração de regra financeira. A correção apenas restabelece o comportamento esperado da limpeza.
+
+### Impacto em LocalStorage
+
+Sem alteração estrutural. A rotina continua removendo chaves `fpro_` e regravando o estado zerado/preservado conforme regra atual.
+
+### Validação técnica
+
+Validação sintática via TypeScript `transpileModule` executada sem diagnósticos.
+
+## v0.3.13 — Refatoração de filtros e autocategorização
+
+Data: 2026-06-29
+
+### Adicionado
+
+- Criado `src/components/finance/TransactionFiltersPanel.jsx`.
+- Criada função `filterTransactions` para centralizar a regra de filtragem da aba Lançamentos.
+- Criado `src/services/categoryService.js`.
+- Movidas para `categoryService.js` as regras de autocategorização, stopwords, normalização de texto, pontuação por palavra-chave, categorização por histórico e resolução de categoria.
+
+### Alterado
+
+- `src/App.jsx` passou a importar o painel de filtros e o serviço de autocategorização.
+- A versão visual foi atualizada para `v0.3.13`.
+
+### Impacto em regra de negócio
+
+- Sem alteração intencional de regra financeira.
+- A ordem de autocategorização foi preservada: regra personalizada, histórico, regras padrão e fallback.
+- A filtragem da aba Lançamentos foi preservada.
+
+### Impacto em LocalStorage
+
+- Sem alteração de chaves.
+- Sem alteração de formato persistido.
+- Sem migração necessária.
+
+### Validação técnica
+
+- Validação sintática via TypeScript `transpileModule` executada sem diagnósticos nos arquivos alterados.
+
+## Encerramento de fim do dia — 2026-06-29
+
+### Situação
+
+- `v0.3.12` aprovada pelo usuário.
+- `v0.3.13` gerada para validação na próxima retomada.
+
+### Próxima validação
+
+Validar filtros de lançamentos e autocategorização após extração.
+
+
+---
+
+## [Planejamento técnico] - 2026-07-02
+
+### Adicionado
+
+- Registrada decisão de preparar a arquitetura para futura publicação no Vercel e futura migração para SQL.
+- Definida recomendação de extrair `cardInvoiceService.js` antes de avançar para Projeções e backend.
+- Definida diretriz de criar camada de repository/storage antes de substituir LocalStorage por API.
+
+### Alterado
+
+- Roadmap passa a considerar Vercel Preview após validação de cartão/fatura e build aprovado.
+- SQL passa a ser tratado como etapa futura após estabilização funcional e UAT inicial.
+
+### Migração
+
+- Nenhuma migração realizada.
+- LocalStorage permanece como persistência oficial.
+
+### Testes
+
+- Não aplicável. Planejamento técnico sem alteração de código executável.
+
+
+---
+
+## [0.3.17.4] - 2026-07-04
+
+### Corrigido
+
+- Corrigida tela branca causada por `getSimulationInstallmentValue is not defined`.
+- Corrigida tela branca ao adicionar simulação causada por `safeMoneyAmount is not defined`.
+- Estabilizada a tela **Simulações** com helpers declarados antes do uso.
+
+### Alterado
+
+- Versão visual intermediária atualizada para `v0.3.17.4` durante validação.
+
+### Migração
+
+- Não houve alteração de LocalStorage.
+- Não houve alteração de formato persistido.
+
+### Testes
+
+- `v0.3.17.4` aprovada pelo usuário em 2026-07-04.
+- Inclusão de nova simulação validada.
+- Tela branca eliminada.
+
+## [0.3.18] - 2026-07-04
+
+### Adicionado
+
+- Criado `src/services/financeRepository.js` para iniciar camada local de repository/storage.
+
+### Alterado
+
+- `src/hooks/useLocalStorage.js` passou a delegar leitura e gravação ao repository local, mantendo a assinatura pública atual.
+- Versão visual atualizada para `v0.3.18`.
+
+### Corrigido
+
+- Não aplicável. Refatoração técnica conservadora.
+
+### Migração
+
+- Não houve alteração de chave ou estrutura do LocalStorage.
+- Não houve migração.
+
+### Testes
+
+- Pendente validação local da `v0.3.18` com `npm run dev`, `npm run build` e `npm run preview`.
+- Pendente regressão de persistência após recarregar a aplicação.

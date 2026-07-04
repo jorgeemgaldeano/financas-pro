@@ -353,3 +353,230 @@ Não altera chaves existentes. Apenas reforça leitura/exportação/restauraçã
 ### Impacto em regra de negócio
 
 Sem impacto nas regras financeiras. Impacto positivo na proteção dos dados.
+
+---
+
+## DEC-0009 — Reutilizar antes de criar e avaliar bibliotecas compatíveis
+
+Data: 2026-06-29
+
+### Contexto
+
+O Finanças PRO cresceu a partir de um `App.jsx` concentrando telas, regras, cálculos, persistência e componentes internos. Com novas funcionalidades, há risco de duplicação de código, criação de padrões paralelos e aumento de complexidade sem necessidade.
+
+### Decisão
+
+Antes de qualquer novo desenvolvimento, correção ou refatoração, deve-se verificar primeiro se já existe solução reaproveitável no projeto, depois se React nativo resolve, depois se há biblioteca JavaScript/React compatível, e somente então criar código próprio.
+
+### Alternativas avaliadas
+
+- Continuar criando soluções próprias diretamente.
+- Adotar bibliotecas preventivamente para todas as áreas.
+- Reescrever o projeto com uma stack completa.
+- Criar regra incremental de reutilização e avaliação antes de novas criações.
+
+### Consequências positivas
+
+- Reduz duplicidade.
+- Reduz risco de divergência entre telas.
+- Facilita modularização incremental.
+- Melhora manutenção.
+- Evita dependências desnecessárias.
+- Prepara o projeto para adoção criteriosa de bibliotecas.
+
+### Consequências negativas ou riscos
+
+- Desenvolvimento pode exigir análise prévia maior.
+- Algumas soluções simples podem demorar mais para serem padronizadas.
+- Bibliotecas úteis podem ser adiadas até haver necessidade concreta.
+
+### Impacto em LocalStorage
+
+Sem impacto direto. A diretriz não altera chaves, formatos ou dados persistidos.
+
+### Impacto em regra de negócio
+
+Sem impacto nas regras financeiras. A decisão altera apenas o processo técnico de evolução.
+
+
+---
+
+## DEC-0010 — Recategorização protegida e filtros sem nova dependência
+
+Data: 2026-06-29
+
+### Contexto
+
+A aplicação precisava permitir edição de categorização após a gravação, filtros na aba **Lançamentos** e recategorização também nas abas **Contas** e **Cartões**. Também foi identificada necessidade de reduzir risco de alterações acidentais de categoria.
+
+### Decisão
+
+Implementar a recategorização por botão **Editar/OK**, usando React nativo e componentes já existentes, sem adicionar biblioteca externa. Os filtros foram implementados como estado local de interface e não são persistidos no LocalStorage.
+
+### Alternativas avaliadas
+
+- Deixar o seletor de categoria sempre editável.
+- Criar modal específico para cada recategorização.
+- Adotar biblioteca de tabela/filtro.
+- Usar controle simples com estado React e botão de confirmação.
+
+### Consequências positivas
+
+- Reduz risco de troca acidental de categoria.
+- Evita dependência externa para filtros simples.
+- Reaproveita padrões existentes do projeto.
+- Mantém a evolução incremental dentro do `App.jsx`.
+
+### Consequências negativas ou riscos
+
+- A lógica de recategorização ainda está dentro do `App.jsx`.
+- Pode haver duplicidade temporária até futura extração de componente reutilizável.
+- Filtros mais avançados no futuro podem justificar componente próprio ou biblioteca de tabela.
+
+### Impacto em LocalStorage
+
+Sem alteração de chave. A recategorização altera apenas campos de categoria já existentes nos lançamentos.
+
+### Impacto em regra de negócio
+
+Baixo. A regra financeira não foi alterada; foi alterado apenas o modo de edição da categorização.
+
+---
+
+## DEC-0011 — Metas devem ser restauradas como objeto
+
+Data: 2026-06-29
+
+### Contexto
+
+Após restauração de backup, os limites/metas por categoria não estavam sendo recuperados corretamente. A causa provável foi normalização de `metas` como array, embora a aplicação trate limites por categoria como objeto.
+
+### Decisão
+
+Manter `metas` como objeto na exportação, restauração e fallback seguro. Backups sem metas devem usar `{}`.
+
+### Alternativas avaliadas
+
+- Converter metas para array.
+- Criar nova chave de LocalStorage para metas.
+- Manter o formato atual como objeto e corrigir a restauração.
+
+### Consequências positivas
+
+- Preserva compatibilidade com dados existentes.
+- Evita migração desnecessária.
+- Corrige restauração de backup sem alterar regra de negócio.
+
+### Consequências negativas ou riscos
+
+- O formato de metas continua dependente de documentação clara até futura centralização em service de storage.
+
+### Impacto em LocalStorage
+
+Sem alteração de chave e sem alteração intencional do formato persistido. Correção para preservar o formato atual.
+
+### Impacto em regra de negócio
+
+Médio positivo. Garante que limites por categoria continuem disponíveis após restauração de backup.
+
+
+---
+
+## DEC-0011 — Preparar arquitetura para Vercel e SQL sem migração imediata
+
+Data: 2026-07-02
+
+### Contexto
+
+Após a estabilização das regras de cartão/fatura nas versões `v0.3.16`, `v0.3.16.1` e `v0.3.16.2`, foi avaliada a possibilidade de publicação no Vercel e futura migração para banco SQL.
+
+A aplicação ainda opera em React + Vite com persistência em LocalStorage, e a versão `v0.3.16.2` ainda depende de validação manual antes de ser considerada estável.
+
+### Decisão
+
+Preparar gradualmente a arquitetura para futura publicação no Vercel e futura migração para backend/API com banco SQL, sem executar a migração neste momento.
+
+A aplicação continuará usando LocalStorage até que as regras financeiras críticas estejam validadas e até que exista uma primeira versão estável/UAT.
+
+### Alternativas avaliadas
+
+- Publicar imediatamente no Vercel mantendo LocalStorage.
+- Criar backend e banco SQL imediatamente.
+- Aguardar a primeira versão estável antes de qualquer preparação.
+- Preparar a arquitetura agora, mantendo LocalStorage e adiando backend/SQL.
+
+### Consequências positivas
+
+- Reduz risco de modelar banco com regras ainda instáveis.
+- Permite publicar futuramente no Vercel sem bloquear a evolução local.
+- Direciona as próximas refatorações para services e repositories.
+- Facilita futura troca de LocalStorage por API.
+- Mantém o foco atual na validação da regra financeira.
+
+### Consequências negativas ou riscos
+
+- A sincronização entre dispositivos continuará inexistente enquanto o app usar LocalStorage.
+- A publicação no Vercel, quando feita, não resolverá persistência centralizada.
+- Será necessário desenhar uma estratégia formal de migração de dados antes do SQL.
+
+### Impacto em LocalStorage
+
+Sem impacto imediato. A decisão reforça que o LocalStorage permanece como persistência oficial até nova decisão técnica.
+
+### Impacto em regra de negócio
+
+Sem alteração direta. A decisão afeta apenas a estratégia técnica futura.
+
+### Diretriz prática
+
+As próximas versões devem priorizar:
+
+1. Validar a `v0.3.16.2`.
+2. Extrair `cardInvoiceService.js` sem alterar comportamento.
+3. Criar uma camada local de repository/storage antes de qualquer backend.
+4. Publicar no Vercel apenas quando houver build validado e versão estável de teste.
+5. Planejar backend/SQL após estabilização funcional e UAT inicial.
+
+
+---
+
+## DEC-0012 — Criar camada local de repository/storage antes de backend
+
+Data: 2026-07-04
+
+### Contexto
+
+Após a aprovação da `v0.3.17.4`, a próxima evolução escolhida foi a opção B: iniciar uma camada local de repository/storage. O objetivo é reduzir o acoplamento direto com LocalStorage e preparar o projeto para futura publicação, backend/API e SQL, sem alterar a persistência oficial neste momento.
+
+### Decisão
+
+Criar `src/services/financeRepository.js` como camada intermediária de acesso ao LocalStorage e atualizar `src/hooks/useLocalStorage.js` para delegar leitura e gravação ao repository local.
+
+A assinatura pública de `useLS`, `lsGet` e `lsSave` deve ser preservada para evitar impacto no `App.jsx`.
+
+### Alternativas avaliadas
+
+- Manter acesso direto ao LocalStorage no hook atual.
+- Substituir LocalStorage por backend/API agora.
+- Criar repository local conservador mantendo LocalStorage.
+
+### Consequências positivas
+
+- Reduz acoplamento técnico.
+- Facilita futura troca de persistência.
+- Mantém comportamento atual da aplicação.
+- Evita migração prematura para backend ou SQL.
+
+### Consequências negativas ou riscos
+
+- A camada inicial ainda é simples e não substitui uma estratégia completa de migração.
+- Pode haver falsa sensação de backend; os dados continuam locais no navegador.
+- Exige validação cuidadosa de persistência após recarregar a aplicação.
+
+### Impacto em LocalStorage
+
+Sem alteração de chaves ou estrutura. LocalStorage continua sendo a persistência oficial.
+
+### Impacto em regra de negócio
+
+Sem alteração de regra financeira.

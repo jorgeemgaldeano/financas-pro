@@ -558,3 +558,147 @@ A próxima extração deve continuar pequena e sem alteração funcional. Não i
 ### Observação
 
 A padronização visual de datas foi feita sem mudança estrutural. O próximo passo deve continuar priorizando funções puras e componentes de baixo risco antes de mexer em fatura, projeções ou recorrências.
+
+
+## Atualização de backlog — v0.3.11
+
+### Concluído
+
+- [x] Validar checklist manual da v0.3.7 conforme informado pelo usuário.
+- [x] Extrair utilitários monetários para `src/utils/moneyUtils.js`.
+- [x] Extrair utilitários de data/mês para `src/utils/dateUtils.js`.
+- [x] Extrair constantes de LocalStorage para `src/constants/storageKeys.js`.
+- [x] Extrair `lsGet`, `lsSave` e `useLS` para `src/hooks/useLocalStorage.js`.
+- [x] Atualizar `DateInput` para reaproveitar `dateUtils.js`.
+
+### Próxima prioridade técnica
+
+- [ ] Validar localmente a v0.3.11 com `npm run dev`, `npm run build` e `npm run preview`.
+- [ ] Executar regressão manual de valores, datas, backup/restauração e recarregamento da aplicação.
+- [ ] Mapear funções candidatas à próxima extração de serviço, priorizando regras não financeiras críticas.
+- [ ] Avaliar extração futura de `categoryService.js` ou componente de filtros, antes de mexer em fatura/projeção.
+
+### Observação
+
+As extrações da v0.3.11 foram técnicas e conservadoras. Não houve mudança funcional, regra financeira ou alteração de LocalStorage.
+
+## Atualização de backlog — v0.3.12
+
+### Concluído
+
+- [x] Corrigir rotina **Apagar dados financeiros** após a refatoração de LocalStorage da v0.3.11.
+- [x] Restaurar import explícito de `lsSave` para uso no `handleReset`.
+- [x] Restaurar import explícito de `LS_VERSION` para exportação de backup.
+
+### Validação pendente
+
+- [ ] Validar manualmente a limpeza de lançamentos, contas e cartões.
+- [ ] Validar persistência da limpeza após atualizar a página.
+
+## Atualização de backlog — Versão 0.3.13 — 2026-06-29
+
+### Concluído nesta etapa
+
+- [x] Extrair componente/função de filtros de lançamentos.
+- [x] Criar `TransactionFiltersPanel.jsx`.
+- [x] Criar função `filterTransactions`.
+- [x] Extrair `categoryService.js` para autocategorização.
+- [x] Preservar regra de autocategorização existente.
+- [x] Preservar comportamento da aba Lançamentos.
+
+### Próximas etapas recomendadas
+
+- [ ] Validar manualmente filtros de lançamentos após extração.
+- [ ] Validar importação com autocategorização por regra personalizada.
+- [ ] Validar importação com autocategorização por histórico.
+- [ ] Validar importação com regras padrão.
+- [ ] Avaliar próxima extração: `importService.js` ou revisão de Projeções.
+
+
+---
+
+## Atualização de roadmap — Preparação para Vercel e SQL — 2026-07-02
+
+### Diretriz
+
+A aplicação deve se preparar para publicação no Vercel e futura migração para SQL, mas sem abandonar o LocalStorage enquanto as regras financeiras críticas não estiverem validadas.
+
+### Nova sequência recomendada
+
+- [ ] Validar integralmente a `v0.3.16.2`.
+- [ ] Corrigir eventuais falhas da validação de cartão/fatura.
+- [ ] Extrair `src/services/cardInvoiceService.js` como refatoração técnica pura.
+- [ ] Criar camada local de repository/storage mantendo LocalStorage.
+- [ ] Revisar Projeções com base nos services financeiros.
+- [ ] Preparar build para publicação no Vercel Preview.
+- [ ] Definir política de branches para Vercel:
+  - `develop` como ambiente de homologação/preview;
+  - `main` como produção futura.
+- [ ] Planejar modelo SQL somente após versão estável/UAT.
+
+### Modelo SQL preliminar a estudar futuramente
+
+Tabelas candidatas:
+
+- `accounts`;
+- `cards`;
+- `transactions`;
+- `invoices`;
+- `invoice_adjustments`;
+- `people`;
+- `shared_expenses`;
+- `simulations`;
+- `categories`;
+- `params`;
+- `import_batches`;
+- `import_reports`.
+
+### Critério para iniciar Vercel
+
+Publicar no Vercel somente após:
+
+- build aprovado;
+- versão visual clara;
+- backup/restauração validado;
+- regras de cartão/fatura validadas;
+- branch `develop` organizada;
+- entendimento de que LocalStorage não sincroniza dados entre dispositivos.
+
+### Critério para iniciar SQL
+
+Iniciar desenho técnico de SQL somente após:
+
+- primeira versão estável/UAT;
+- modelo de dados documentado;
+- regras de cartão/fatura estáveis;
+- regras de projeção e simulação minimamente estabilizadas;
+- estratégia de migração de LocalStorage definida;
+- decisão técnica registrada.
+
+
+---
+
+## Atualização de roadmap — Pós-aprovação v0.3.17.4 — 2026-07-04
+
+### Concluído
+
+- [x] Aprovar `v0.3.17.4`.
+- [x] Corrigir tela branca em Simulações.
+- [x] Corrigir ausência de `getSimulationInstallmentValue`.
+- [x] Corrigir ausência de `safeMoneyAmount`.
+
+### Próxima etapa iniciada
+
+- [x] Iniciar `v0.3.18` com camada local de repository/storage.
+- [x] Criar `src/services/financeRepository.js`.
+- [x] Atualizar `src/hooks/useLocalStorage.js` preservando contrato atual.
+
+### Validação pendente da v0.3.18
+
+- [ ] Validar abertura da aplicação.
+- [ ] Validar persistência de lançamentos.
+- [ ] Validar persistência de simulações.
+- [ ] Validar backup/exportação.
+- [ ] Validar rotina de apagar dados financeiros.
+- [ ] Executar `npm run build`.
+- [ ] Executar `npm run preview`.
