@@ -620,3 +620,41 @@ Nenhum.
 ### Impacto em regra de negócio
 
 Nenhuma alteração intencional. A regra atual foi apenas movida para service.
+
+
+## DEC-0018 — Projeções devem usar dados reais e fluxo de caixa
+
+Data: 2026-07-04
+
+### Contexto
+
+A aba Projeções exibia visão genérica baseada em fixos e variáveis, sem permitir análise financeira real.
+
+### Decisão
+
+A partir da `v0.3.20`, a aba Projeções deve usar dados reais existentes no sistema e exibir gráfico de fluxo de caixa.
+
+### Alternativas avaliadas
+
+- Manter média de fixos e variáveis.
+- Apenas trocar os rótulos da tela.
+- Recalcular projeções com receitas, despesas, faturas e simulações.
+
+### Consequências positivas
+
+- Melhora a análise financeira.
+- Permite visualizar evolução do saldo.
+- Prepara a tela para relatórios mais úteis.
+
+### Consequências negativas ou riscos
+
+- Maior complexidade de cálculo.
+- Risco de duplicidade entre despesa de cartão e pagamento de fatura, mitigado pela separação de fatura como saída de caixa.
+
+### Impacto em LocalStorage
+
+Sem impacto estrutural.
+
+### Impacto em regra de negócio
+
+Médio/alto na interpretação da aba Projeções. Não altera regras de lançamento, fatura ou baixa.

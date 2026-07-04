@@ -605,3 +605,33 @@ Validar filtros de lançamentos e autocategorização após extração.
 
 - Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
 - Pendente validação manual da aba **Projeções** comparando comportamento com `v0.3.18`.
+
+
+## [0.3.20] - 2026-07-04
+
+### Adicionado
+
+- Criado gráfico de fluxo de caixa na aba Projeções.
+- Criado componente `src/components/charts/CashFlowChart.jsx`.
+- Ampliado `src/services/projectionService.js` com projeção real por competência.
+- Adicionados filtros de projeção por ano e por período.
+
+### Alterado
+
+- Aba Projeções deixa de exibir visão genérica de fixos/variáveis e passa a usar dados reais: receitas, despesas, faturas e simulações.
+- Versão visual atualizada para `v0.3.20`.
+
+### Corrigido
+
+- Corrigida baixa utilidade analítica da aba Projeções.
+
+### Migração
+
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração de estrutura persistida.
+- Não houve migração.
+
+### Testes
+
+- Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
+- Pendente validação manual da aba Projeções em modo Ano e Período.

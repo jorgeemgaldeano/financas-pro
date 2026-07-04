@@ -9,13 +9,14 @@ import { useLS, lsSave } from "./hooks/useLocalStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
-import { buildMonthlyExpenseProjection } from "./services/projectionService.js";
+import { buildRealCashFlowProjection } from "./services/projectionService.js";
+import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.19";
+const APP_VERSION = "0.3.20";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -1826,6 +1827,10 @@ export default function App() {
     tipo: "",
     status: "",
   });
+  const [projectionMode, setProjectionMode] = useState("ano");
+  const [projectionYear, setProjectionYear] = useState(String(Y));
+  const [projectionStartMonth, setProjectionStartMonth] = useState(selMonth);
+  const [projectionEndMonth, setProjectionEndMonth] = useState(monthOffset(selMonth, Math.max(1, parseInt(params.mesesProjecao, 10) || 3) - 1));
 
   useEffect(() => {
     const primeiraCC = contas.find(c => c.tipo === "corrente")?.id || contas[0]?.id || "cc1";
@@ -1945,12 +1950,38 @@ export default function App() {
     };
   }),[cards,contas,calcularFaturaCartao,simTrans,selMonth,faturas,trans]);
 
-  const projections = useMemo(() => buildMonthlyExpenseProjection({
+  const projections = useMemo(() => buildRealCashFlowProjection({
     transactions: trans,
+    cards,
+    invoices: faturas,
+    simulationTransactions: simTrans,
+    mode: projectionMode,
+    year: projectionYear,
+    startMonth: projectionStartMonth,
+    endMonth: projectionEndMonth,
+    selectedMonth: selMonth,
     numberOfMonths: params.mesesProjecao,
-    baseDate: TODAY,
     monthLabels: MONTHS,
-  }), [trans, params.mesesProjecao]);
+    getInitialBalanceForMonth: monthKey => contas.reduce((sum, conta) => sum + getSaldoInicialConta(conta, monthKey), 0),
+    getCardInvoiceTotal: (card, monthKey) => calcularFaturaCartao(card, monthKey).total,
+    getInvoiceId: invoiceIdFor,
+  }), [
+    trans, cards, faturas, simTrans, projectionMode, projectionYear,
+    projectionStartMonth, projectionEndMonth, selMonth, params.mesesProjecao,
+    contas, getSaldoInicialConta, calcularFaturaCartao
+  ]);
+
+  const projectionTotals = useMemo(() => projections.reduce((acc, item) => ({
+    receitas: acc.receitas + item.receitas,
+    despesas: acc.despesas + item.despesas,
+    faturas: acc.faturas + item.faturas,
+    simulacoes: acc.simulacoes + item.simulacoes,
+    entradas: acc.entradas + item.entradas,
+    saidas: acc.saidas + item.saidas,
+  }), { receitas:0, despesas:0, faturas:0, simulacoes:0, entradas:0, saidas:0 }), [projections]);
+
+  const projectionFirst = projections[0];
+  const projectionLast = projections[projections.length - 1];
 
   // Styles
   const card  = (x={})=>({ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:"18px 22px", ...x });
@@ -3612,22 +3643,92 @@ export default function App() {
         {tab==="projecoes"&&(
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div style={card()}>
-              <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>Projeção — Próximos {params.mesesProjecao} meses</div>
-              <div style={{ fontSize:13, color:C.soft, marginBottom:16 }}>Baseado em fixos + média de variáveis históricos</div>
-              <div style={{ display:"grid", gridTemplateColumns:`repeat(${Math.min(params.mesesProjecao,4)},1fr)`, gap:12 }}>
-                {projections.map(p=>(
-                  <div key={p.label} style={{ background:C.navy, borderRadius:9, padding:"16px 14px" }}>
-                    <div style={{ fontWeight:700, marginBottom:9 }}>{p.label}</div>
-                    <div style={big(C.gold)}>{fmtBRL(p.value)}</div>
-                    <div style={{ marginTop:9, display:"flex", flexDirection:"column", gap:4 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12 }}><span style={{ color:C.soft }}>Fixos</span><span>{fmtBRL(p.fixo)}</span></div>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12 }}><span style={{ color:C.soft }}>Variáveis</span><span>{fmtBRL(p.variavel)}</span></div>
-                    </div>
+              <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start", flexWrap:"wrap", marginBottom:14 }}>
+                <div>
+                  <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>Projeções reais e fluxo de caixa</div>
+                  <div style={{ fontSize:13, color:C.soft }}>Baseado em receitas, despesas, pagamentos de fatura e simulações existentes no sistema.</div>
+                </div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"end" }}>
+                  <div>
+                    <div style={lbl}>Modo</div>
+                    <select style={{ ...inp, width:130 }} value={projectionMode} onChange={e=>setProjectionMode(e.target.value)}>
+                      <option value="ano">Ano</option>
+                      <option value="periodo">Período</option>
+                    </select>
                   </div>
-                ))}
+                  {projectionMode==="ano" ? (
+                    <div>
+                      <div style={lbl}>Ano</div>
+                      <input style={{ ...inp, width:100 }} type="number" min="2000" max="2100" value={projectionYear} onChange={e=>setProjectionYear(e.target.value)} />
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <div style={lbl}>Início</div>
+                        <input style={{ ...inp, width:140 }} type="month" value={projectionStartMonth} onChange={e=>setProjectionStartMonth(e.target.value)} />
+                      </div>
+                      <div>
+                        <div style={lbl}>Fim</div>
+                        <input style={{ ...inp, width:140 }} type="month" value={projectionEndMonth} onChange={e=>setProjectionEndMonth(e.target.value)} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:16 }}>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saldo inicial</div><div style={big(C.text)}>{fmtBRL(projectionFirst?.saldoInicial || 0)}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Entradas</div><div style={big(C.emerald)}>{fmtBRL(projectionTotals.entradas)}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saídas</div><div style={big(C.coral)}>{fmtBRL(projectionTotals.saidas)}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saldo final projetado</div><div style={big((projectionLast?.saldoProjetado || 0) < 0 ? C.coral : C.gold)}>{fmtBRL(projectionLast?.saldoProjetado || 0)}</div></div>
+              </div>
+
+              <CashFlowChart
+                data={projections}
+                height={260}
+                colors={{ saldo:C.gold, entradas:C.emerald, saidas:C.coral, text:C.text, soft:C.soft, grid:C.border }}
+              />
+            </div>
+
+            <div style={card()}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:12 }}>Detalhamento por competência</div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:860 }}>
+                  <thead>
+                    <tr style={{ background:C.border }}>
+                      {["Mês","Saldo inicial","Receitas","Despesas","Faturas","Simulações","Fluxo líquido","Saldo projetado"].map((h,i)=>(
+                        <th key={h} style={{ padding:"8px 10px", textAlign:i===0?"left":"right", color:C.soft, fontSize:10 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projections.map(p=>{
+                      const saldoNegativo = p.saldoProjetado < 0;
+                      return (
+                        <tr key={p.monthKey} style={{ borderTop:`1px solid ${C.border}`, background:saldoNegativo?C.coral+"10":"transparent" }}>
+                          <td style={{ padding:"8px 10px", fontWeight:700 }}>{p.label}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right" }}>{fmtBRL(p.saldoInicial)}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:C.emerald }}>{fmtBRL(p.receitas)}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:C.coral }}>{fmtBRL(p.despesas)}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:p.faturas>0?C.gold:C.soft }}>{p.faturas>0?fmtBRL(p.faturas):"—"}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:p.simulacoes>0?"#CE93D8":C.soft }}>{p.simulacoes>0?fmtBRL(p.simulacoes):"—"}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:p.fluxoLiquido<0?C.coral:C.emerald, fontWeight:700 }}>{fmtBRL(p.fluxoLiquido)}</td>
+                          <td style={{ padding:"8px 10px", textAlign:"right", color:saldoNegativo?C.coral:C.gold, fontWeight:800 }}>{fmtBRL(p.saldoProjetado)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize:11, color:C.soft, marginTop:10 }}>
+                Faturas: pagamentos previstos já lançados e faturas ainda não fechadas projetadas para o mês de vencimento. Simulações: impacto projetado no mês subsequente à competência da fatura.
               </div>
             </div>
-            <div style={card()}><div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>Histórico</div><BarChart data={last6} color={C.gold} height={110}/></div>
+
+            <div style={card()}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>Histórico de despesas realizadas</div>
+              <BarChart data={last6} color={C.gold} height={110}/>
+            </div>
           </div>
         )}
 
