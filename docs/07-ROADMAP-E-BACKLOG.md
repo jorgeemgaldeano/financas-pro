@@ -702,3 +702,26 @@ Iniciar desenho técnico de SQL somente após:
 - [ ] Validar rotina de apagar dados financeiros.
 - [ ] Executar `npm run build`.
 - [ ] Executar `npm run preview`.
+
+
+## Atualização — v0.3.19 — 2026-07-04
+
+### Concluído tecnicamente para validação
+
+- [x] Criado `src/services/projectionService.js`.
+- [x] Extraído cálculo conservador da tela **Projeções** para service próprio.
+- [x] Mantida a regra atual de média mensal de despesas fixas e variáveis.
+- [x] Mantido LocalStorage sem alteração estrutural.
+- [x] Mantida ausência de novas bibliotecas.
+
+### Pendente de validação manual
+
+- [ ] Confirmar versão visual `v0.3.19`.
+- [ ] Validar aba **Projeções**.
+- [ ] Comparar valores com a `v0.3.18`.
+- [ ] Validar `npm run build`.
+- [ ] Validar `npm run preview`.
+
+### Próximo passo sugerido após aprovação
+
+- `v0.3.20` — preparação conservadora para Vercel Preview, mantendo LocalStorage e sem backend.

@@ -9,12 +9,13 @@ import { useLS, lsSave } from "./hooks/useLocalStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
+import { buildMonthlyExpenseProjection } from "./services/projectionService.js";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.18";
+const APP_VERSION = "0.3.19";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -1944,7 +1945,12 @@ export default function App() {
     };
   }),[cards,contas,calcularFaturaCartao,simTrans,selMonth,faturas,trans]);
 
-  const projections = useMemo(()=>{ const fix=trans.filter(t=>t.fixo&&t.tipo==="despesa"); const fixM=[...new Set(fix.map(t=>transMonthKey(t)))]; const fixV=fixM.length?fix.reduce((s,t)=>s+t.valor,0)/fixM.length:0; const vari=trans.filter(t=>!t.fixo&&t.tipo==="despesa"); const varM=[...new Set(vari.map(t=>transMonthKey(t)))]; const varV=varM.length?vari.reduce((s,t)=>s+t.valor,0)/varM.length:0; return Array.from({length:params.mesesProjecao},(_,i)=>{ const dt=new Date(Y,M+1+i,1); return { label:`${MONTHS[dt.getMonth()]}/${dt.getFullYear()}`, value:fixV+varV, fixo:fixV, variavel:varV }; }); },[trans,params.mesesProjecao]);
+  const projections = useMemo(() => buildMonthlyExpenseProjection({
+    transactions: trans,
+    numberOfMonths: params.mesesProjecao,
+    baseDate: TODAY,
+    monthLabels: MONTHS,
+  }), [trans, params.mesesProjecao]);
 
   // Styles
   const card  = (x={})=>({ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:"18px 22px", ...x });

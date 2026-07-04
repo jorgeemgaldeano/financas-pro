@@ -550,53 +550,58 @@ Validar filtros de lançamentos e autocategorização após extração.
 
 - Não aplicável. Planejamento técnico sem alteração de código executável.
 
+## [0.3.17] - 2026-07-04 — Validação interrompida
 
----
+### Situação
 
-## [0.3.17.4] - 2026-07-04
+- A versão `v0.3.17` permanece em validação e não deve ser considerada aprovada.
+- Foi registrada regressão com tela branca durante execução local.
+- O console indicou erro `ReferenceError: getSimulationInstallmentValue is not defined` em `expandSim`.
+- Após tentativa de correção, o usuário informou que o erro continua.
 
-### Corrigido
+### Decisão
 
-- Corrigida tela branca causada por `getSimulationInstallmentValue is not defined`.
-- Corrigida tela branca ao adicionar simulação causada por `safeMoneyAmount is not defined`.
-- Estabilizada a tela **Simulações** com helpers declarados antes do uso.
-
-### Alterado
-
-- Versão visual intermediária atualizada para `v0.3.17.4` durante validação.
+- Não avançar para `v0.3.18` antes de corrigir e validar a `v0.3.17`.
+- Na próxima retomada, priorizar diagnóstico de divergência entre arquivos/pacote/local e corrigir apenas o erro bloqueante.
 
 ### Migração
 
-- Não houve alteração de LocalStorage.
-- Não houve alteração de formato persistido.
+- Não houve alteração de LocalStorage nesta anotação.
 
 ### Testes
 
-- `v0.3.17.4` aprovada pelo usuário em 2026-07-04.
-- Inclusão de nova simulação validada.
-- Tela branca eliminada.
+- Pendente revalidação com `npm run dev`, `npm run build` e `npm run preview`.
 
-## [0.3.18] - 2026-07-04
+
+
+## [0.3.19] - 2026-07-04
 
 ### Adicionado
 
-- Criado `src/services/financeRepository.js` para iniciar camada local de repository/storage.
+- Criado `src/services/projectionService.js` para centralizar o cálculo de projeções mensais.
+- Criada função `buildMonthlyExpenseProjection` para calcular despesas fixas, variáveis e total projetado.
 
 ### Alterado
 
-- `src/hooks/useLocalStorage.js` passou a delegar leitura e gravação ao repository local, mantendo a assinatura pública atual.
-- Versão visual atualizada para `v0.3.18`.
+- `src/App.jsx` passou a importar `buildMonthlyExpenseProjection`.
+- Cálculo `projections` foi mantido em `useMemo`, mas delegando a regra pura ao service.
+- Versão visual atualizada para `v0.3.19`.
 
 ### Corrigido
 
-- Não aplicável. Refatoração técnica conservadora.
+- Não aplicável. Refatoração técnica sem alteração funcional intencional.
+
+### Removido
+
+- Não aplicável. Nenhuma funcionalidade foi removida.
 
 ### Migração
 
-- Não houve alteração de chave ou estrutura do LocalStorage.
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração de estrutura persistida.
 - Não houve migração.
 
 ### Testes
 
-- Pendente validação local da `v0.3.18` com `npm run dev`, `npm run build` e `npm run preview`.
-- Pendente regressão de persistência após recarregar a aplicação.
+- Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
+- Pendente validação manual da aba **Projeções** comparando comportamento com `v0.3.18`.

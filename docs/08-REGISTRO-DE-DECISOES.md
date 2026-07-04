@@ -580,3 +580,43 @@ Sem alteração de chaves ou estrutura. LocalStorage continua sendo a persistên
 ### Impacto em regra de negócio
 
 Sem alteração de regra financeira.
+
+
+## DEC-0012 — Extrair cálculo de Projeções para service próprio
+
+Data: 2026-07-04
+
+### Contexto
+
+Após a aprovação da `v0.3.18`, o projeto passou a contar com uma camada inicial de repository/storage. A sequência técnica prevista indicava revisar a tela **Projeções** usando services, preparando a aplicação para maior modularização sem alterar regra financeira.
+
+### Decisão
+
+Criar `src/services/projectionService.js` e mover para ele o cálculo puro das projeções mensais, mantendo o `App.jsx` responsável apenas por chamar o service dentro de `useMemo`.
+
+### Alternativas avaliadas
+
+- Manter o cálculo inline no `App.jsx`.
+- Reescrever toda a tela de Projeções.
+- Criar uma página separada `ProjectionsPage.jsx` nesta etapa.
+- Extrair somente o cálculo puro para service.
+
+### Consequências positivas
+
+- Reduz responsabilidade do `App.jsx`.
+- Facilita testes futuros de Projeções.
+- Prepara a separação gradual entre UI e regra de cálculo.
+- Mantém a aplicação executável a cada etapa.
+
+### Consequências negativas ou riscos
+
+- A tela de Projeções ainda permanece renderizada dentro do `App.jsx`.
+- O cálculo continua simples e deve ser revisado futuramente para considerar mais detalhes financeiros, se aprovado.
+
+### Impacto em LocalStorage
+
+Nenhum.
+
+### Impacto em regra de negócio
+
+Nenhuma alteração intencional. A regra atual foi apenas movida para service.
