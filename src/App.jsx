@@ -284,6 +284,16 @@ const paymentStatusByPaidAmount = (paidAmount, totalAmount) => {
   return "previsto";
 };
 const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+const valorExibicaoLancamento = (t) => roundMoney(Number(t?.valor) || Number(t?.amount) || valorRealizado(t));
+const safeMoneyAmount = (value) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  return moneyToNumber(value);
+};
+const getSimulationInstallmentValue = (sim) => {
+  const parcelas = Math.max(1, parseInt(sim?.parcelas, 10) || 1);
+  const valorBase = safeMoneyAmount(sim?.valor);
+  return roundMoney(sim?.modoParc === "total" ? valorBase / parcelas : valorBase);
+};
 const invoicePaymentLabel = (paidAmount, totalAmount) => {
   const paid = roundMoney(paidAmount);
   const total = roundMoney(totalAmount);
@@ -410,9 +420,9 @@ function DonutChart({ segments, size=120 }) {
 // ── Sim expander
 function expandSim(sim, cards = [], faturas = []) {
   if (!sim?.data) return [];
-  const n = parseInt(sim.parcelas) || 1;
+  const n = Math.max(1, parseInt(sim.parcelas, 10) || 1);
   const card = cards.find(c => c.id === sim.cartaoId);
-  const vp = sim.modoParc === "total" ? moneyToNumber(sim.valor) / n : moneyToNumber(sim.valor);
+  const vp = getSimulationInstallmentValue(sim);
   const firstCompetence = sim.faturaCompetencia || getCardInvoiceCompetence(sim.data, card, faturas);
 
   return Array.from({ length:n }, (_, i) => {
@@ -470,7 +480,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
   const novoDespForm = () => ({
     tipo:"receita", descricao:"", valor:"", data:new Date().toISOString().slice(0,10),
     cartaoId:"", catId:"", status:"pendente",
-    parcelado:false, modoParc:"total", parcelas:2,
+    parcelado:false, modoParc:"total", parcelas:"",
     fixo:false, fixoDia:"", fixoMeses:12
   });
   const [modalDesp,   setModalDesp]  = useState(false);
@@ -591,6 +601,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
     if(!requireDespField(Boolean(despForm.descricao?.trim()), "Descrição", "despDescricao")) return;
     if(!requireDespField(moneyToNumber(despForm.valor)>0, "Valor", "despValor")) return;
     if(!requireDespField(Boolean(despForm.catId), "Categoria", "despCatId")) return;
+    if(despForm.parcelado && !requireDespField(Boolean(despForm.parcelas) && parseInt(despForm.parcelas, 10) >= 2, "Número de parcelas", "despParcelas")) return;
     if(!despForm.fixo && !requireDespField(Boolean(despForm.data), "Data", "despData")) return;
     if(despForm.fixo && !requireDespField(Boolean(despForm.fixoDia) && parseInt(despForm.fixoDia)>=1 && parseInt(despForm.fixoDia)<=31, "Dia do mês", "despFixoDia")) return;
 
@@ -1199,7 +1210,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
                       ))}
                     </div>
                     <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
-                      <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={2} max={48} value={despForm.parcelas||2} onChange={e=>setDespForm(f=>({...f,parcelas:e.target.value}))}/></div>
+                      <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={2} max={48} value={despForm.parcelas ?? ""} onChange={e=>setDespForm(f=>({...f,parcelas:e.target.value}))}/></div>
                       <div><div style={lbl}>Data 1ª parcela</div><DateInput style={highlightIfRequired(inp, requiredModal, "despData")} value={despForm.data||""} onChange={value=>setDespForm(f=>({...f,data:value}))}/></div>
                     </div>
                     {despForm.valor&&despForm.parcelas&&(
@@ -1664,7 +1675,7 @@ export default function App() {
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
   const [sims,     setSims]     = useLS("simulacoes", []);
-  const [simForm,  setSimForm]  = useState({ modoParc:"total", parcelas:1 });
+  const [simForm,  setSimForm]  = useState({ modoParc:"total", parcelas:"" });
   const [showContaForm, setShowContaForm] = useState(false);
   const [novaContaForm, setNovaContaForm] = useState({ nome:"", tipo:"corrente" });
   const [impStep,  setImpStep]  = useState("upload");
@@ -1840,7 +1851,7 @@ export default function App() {
     const primeiraCC = contas.find(c=>c.tipo==="corrente");
     setModal("addTrans");
     setForm({ tipo:"despesa", origemTipo:"corrente", contaId:primeiraCC?.id||"", cartaoId:"",
-              fixo:false, parcelado:false, modoParc:"total", parcelas:2,
+              fixo:false, parcelado:false, modoParc:"total", parcelas:"",
               fixoDia:"", fixoMeses:12 });
   };
   const closeModal=()=>{ setModal(null); setForm({}); };
@@ -1853,15 +1864,19 @@ export default function App() {
 
   const assertCardInvoicesOpenForEntries = useCallback((entries) => {
     const closedEntry = entries.find(entry => {
-      const card = cards.find(c => c.id === entry.cardId);
-      return card && isInvoiceClosedForNewEntries(faturas, card, entry.competencia);
+      const entryCardId = entry.cardId || entry.cartaoId;
+      const entryMonth = entry.competencia || entry.faturaCompetencia || entry.competenceMonth;
+      const card = cards.find(c => c.id === entryCardId);
+      return card && isInvoiceClosedForNewEntries(faturas, card, entryMonth);
     });
 
     if (!closedEntry) return true;
 
-    const card = cards.find(c => c.id === closedEntry.cardId);
-    const closureStatus = getInvoiceClosureStatusForMonth(faturas, card, closedEntry.competencia);
-    alert(`A fatura de ${card?.nome || "cartão"} em ${formatMonthBR(closedEntry.competencia)} está ${invoiceClosureLabel(closureStatus).toLowerCase()}. Para incluir lançamentos, reabra a fatura e depois feche novamente manualmente para atualizar o pagamento previsto.`);
+    const closedCardId = closedEntry.cardId || closedEntry.cartaoId;
+    const closedMonth = closedEntry.competencia || closedEntry.faturaCompetencia || closedEntry.competenceMonth;
+    const card = cards.find(c => c.id === closedCardId);
+    const closureStatus = getInvoiceClosureStatusForMonth(faturas, card, closedMonth);
+    alert(`A fatura de ${card?.nome || "cartão"} em ${formatMonthBR(closedMonth)} está ${invoiceClosureLabel(closureStatus).toLowerCase()}. Para incluir lançamentos, reabra a fatura e depois feche novamente manualmente para atualizar o pagamento previsto.`);
     return false;
   }, [cards, faturas]);
 
@@ -1887,6 +1902,7 @@ export default function App() {
     if(isCartao&&!requireField(Boolean(form.cartaoId), "Cartão", "cartaoId")) return;
     if(!isCartao&&!requireField(Boolean(form.contaId), "Conta / Vale", "contaId")) return;
     if(!form.fixo&&!requireField(Boolean(form.data), "Data", "data")) return;
+    if(form.parcelado&&!requireField(Boolean(form.parcelas) && parseInt(form.parcelas, 10) >= 2, "Número de parcelas", "parcelas")) return;
     if(form.fixo&&!requireField(Boolean(form.fixoDia) && parseInt(form.fixoDia)>=1 && parseInt(form.fixoDia)<=31, "Dia do mês", "fixoDia")) return;
 
     // Derivar campos de origem
@@ -1949,6 +1965,85 @@ export default function App() {
     closeModal();
   };
   const delTrans=(id)=>setTrans(p=>p.filter(t=>t.id!==id));
+
+  const selecionarEscopoLancamentoParcelado = (t, acao = "alterar") => {
+    if (!t?.parcelaGrupo || !t?.totalParcelas || Number(t.totalParcelas) <= 1) return "mes";
+    const escolha = window.prompt(
+      `Este lançamento faz parte de uma compra parcelada. Como deseja ${acao}?\n\n` +
+      "1 - Somente o lançamento deste mês\n" +
+      "2 - Todos os lançamentos da compra parcelada\n" +
+      "3 - Este lançamento e os futuros\n\n" +
+      "Informe 1, 2 ou 3:",
+      "1"
+    );
+    if (escolha === null) return null;
+    if (escolha === "2") return "todos";
+    if (escolha === "3") return "futuro";
+    return "mes";
+  };
+
+  const obterLancamentosCartaoPorEscopo = useCallback((alvo, escopo) => {
+    if (!alvo) return [];
+    if (!alvo.parcelaGrupo || !alvo.totalParcelas || escopo === "mes") return [alvo];
+    return trans.filter(t => {
+      if (t.origem !== "cartao") return false;
+      if (t.parcelaGrupo !== alvo.parcelaGrupo) return false;
+      if ((t.cartaoId || t.cardId) !== (alvo.cartaoId || alvo.cardId)) return false;
+      if (escopo === "todos") return true;
+      if (escopo === "futuro") return Number(t.parcela || 0) >= Number(alvo.parcela || 0);
+      return t.id === alvo.id;
+    });
+  }, [trans]);
+
+  const editarValorLancamentoCartao = useCallback((id) => {
+    const alvo = trans.find(t => t.id === id);
+    if (!alvo || alvo.origem !== "cartao") return;
+    const escopo = selecionarEscopoLancamentoParcelado(alvo, "alterar o valor");
+    if (!escopo) return;
+    const alvos = obterLancamentosCartaoPorEscopo(alvo, escopo);
+    if (!alvos.length) return;
+    if (!assertCardInvoicesOpenForEntries(alvos)) return;
+
+    const valorAtual = fmtBRL(Math.abs(Number(alvo.valor) || Number(alvo.amount) || 0));
+    const valorRaw = window.prompt("Novo valor do lançamento", valorAtual.replace("R$", "").trim());
+    if (valorRaw === null) return;
+    const novoValor = roundMoney(moneyToNumber(valorRaw));
+    if (novoValor <= 0) { alert("Informe um valor válido."); return; }
+
+    const ids = new Set(alvos.map(t => t.id));
+    setTrans(prev => prev.map(t => {
+      if (!ids.has(t.id)) return t;
+      const valorPagoAtual = Number(t.valorPago ?? t.paidAmount) || 0;
+      const novoValorPago = t.status === "pago"
+        ? novoValor
+        : t.status === "parcial"
+          ? Math.min(novoValor, valorPagoAtual)
+          : 0;
+      return {
+        ...t,
+        valor: novoValor,
+        amount: novoValor,
+        valorPago: novoValorPago,
+        paidAmount: novoValorPago,
+        pendingAmount: Math.max(0, roundMoney(novoValor - novoValorPago)),
+        updatedAt: new Date().toISOString(),
+      };
+    }));
+  }, [trans, obterLancamentosCartaoPorEscopo, assertCardInvoicesOpenForEntries]);
+
+  const excluirLancamentoCartao = useCallback((id) => {
+    const alvo = trans.find(t => t.id === id);
+    if (!alvo || alvo.origem !== "cartao") return;
+    const escopo = selecionarEscopoLancamentoParcelado(alvo, "excluir");
+    if (!escopo) return;
+    const alvos = obterLancamentosCartaoPorEscopo(alvo, escopo);
+    if (!alvos.length) return;
+    if (!assertCardInvoicesOpenForEntries(alvos)) return;
+    const msgEscopo = escopo === "todos" ? "todos os lançamentos da compra parcelada" : escopo === "futuro" ? "este lançamento e os futuros" : "somente este lançamento";
+    if (!window.confirm(`Confirma excluir ${msgEscopo}?`)) return;
+    const ids = new Set(alvos.map(t => t.id));
+    setTrans(prev => prev.filter(t => !ids.has(t.id)));
+  }, [trans, obterLancamentosCartaoPorEscopo, assertCardInvoicesOpenForEntries]);
 
   const abrirEdicaoRecorrencia = (grupo) => {
     const ref = grupo.sample;
@@ -2053,7 +2148,9 @@ export default function App() {
     setTrans(prev => prev.map(t => t.id === id ? {
       ...t,
       valor: total,
+      amount: total,
       valorPago: novoPago,
+      paidAmount: novoPago,
       pendingAmount: Math.max(0, roundMoney(total - novoPago)),
       status: novoStatus,
       updatedAt: new Date().toISOString()
@@ -2125,8 +2222,11 @@ export default function App() {
     const invoiceId = invoiceIdFor(cardId, selMonth);
     const paymentMonth = monthOffset(selMonth, 1);
     const paymentDate = dateForMonthDay(paymentMonth, card.vencimento);
-    const existingPayment = trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao");
-    const paymentTransactionId = existingPayment?.id || uid();
+    const existingInvoice = getInvoiceRecordFor(faturas, cardId, selMonth) || faturas.find(f => f.id === invoiceId);
+    const existingPayment = (existingInvoice?.paymentTransactionId ? trans.find(t => t.id === existingInvoice.paymentTransactionId) : null)
+      || trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao")
+      || trans.find(t => t.faturaMes === selMonth && t.cartaoId === cardId && t.natureza === "fatura_cartao");
+    const paymentTransactionId = existingPayment?.id || existingInvoice?.paymentTransactionId || uid();
 
     if (existingPayment) {
       const atualizar = window.confirm("Esta fatura já possui pagamento previsto. Deseja atualizar o valor previsto mantendo as baixas já feitas?");
@@ -2134,12 +2234,20 @@ export default function App() {
       setTrans(prev => prev.map(t => t.id === existingPayment.id ? {
         ...t,
         valor: totalFatura,
+        amount: totalFatura,
         data: paymentDate,
         competencia: paymentMonth,
+        competenceMonth: paymentMonth,
         contaId: contaPagamentoId,
         accountId: contaPagamentoId,
-        status: paymentStatusByPaidAmount(t.valorPago, totalFatura),
-        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago) || 0))),
+        cartaoId: cardId,
+        cardId,
+        invoiceId,
+        faturaMes: selMonth,
+        status: paymentStatusByPaidAmount(t.valorPago ?? t.paidAmount, totalFatura),
+        valorPago: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        paidAmount: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago ?? t.paidAmount) || 0))),
         updatedAt: new Date().toISOString(),
       } : t));
     } else {
@@ -2151,22 +2259,26 @@ export default function App() {
         catId: "cat10",
         descricao: `Pagamento fatura ${card.nome} - ${selMonth}`,
         valor: totalFatura,
+        amount: totalFatura,
         data: paymentDate,
         competencia: paymentMonth,
+        competenceMonth: paymentMonth,
         contaId: contaPagamentoId,
         accountId: contaPagamentoId,
         cartaoId: cardId,
+        cardId,
         invoiceId,
         faturaMes: selMonth,
         status: "previsto",
         valorPago: 0,
+        paidAmount: 0,
         pendingAmount: totalFatura,
         fixo: false,
       }]);
     }
 
     setFaturas(prev => {
-      const valorPagoAtual = roundMoney(Number(existingPayment?.valorPago) || 0);
+      const valorPagoAtual = roundMoney(Number(existingPayment?.valorPago ?? existingPayment?.paidAmount) || 0);
       const nova = {
         id: invoiceId,
         cardId,
@@ -2213,12 +2325,20 @@ export default function App() {
       setTrans(prev => prev.map(t => t.id === existingPayment.id ? {
         ...t,
         valor: totalFatura,
+        amount: totalFatura,
         data: paymentDate,
         competencia: paymentMonth,
+        competenceMonth: paymentMonth,
         contaId: contaPagamentoId,
         accountId: contaPagamentoId,
-        status: paymentStatusByPaidAmount(t.valorPago, totalFatura),
-        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago) || 0))),
+        cartaoId: cardId,
+        cardId,
+        invoiceId,
+        faturaMes: selMonth,
+        status: paymentStatusByPaidAmount(t.valorPago ?? t.paidAmount, totalFatura),
+        valorPago: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        paidAmount: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago ?? t.paidAmount) || 0))),
         updatedAt: new Date().toISOString(),
       } : t));
     }
@@ -2255,9 +2375,10 @@ export default function App() {
     if(!requireField(Boolean(simForm.data), "Data da compra", "simData")) return;
     if(!requireField(Boolean(simForm.cartaoId), "Cartão", "simCartaoId")) return;
     if(!requireField(Boolean(simForm.catId), "Categoria", "simCatId")) return;
+    if(!requireField(Boolean(simForm.parcelas) && parseInt(simForm.parcelas, 10) >= 1, "Número de parcelas", "simParcelas")) return;
     const competencia = resolveCardCompetencia(simForm.data, simForm.cartaoId, simForm.faturaCompetencia);
-    setSims(p=>[...p,{ ...simForm, id:"sim_"+uid(), valor:moneyToNumber(simForm.valor), parcelas:parseInt(simForm.parcelas)||1, faturaCompetencia:competencia }]);
-    setSimForm(p=>({ modoParc:p.modoParc, parcelas:1, cartaoId:p.cartaoId, faturaCompetencia:"" }));
+    setSims(p=>[...p,{ ...simForm, id:"sim_"+uid(), valor:safeMoneyAmount(simForm.valor), parcelas:parseInt(simForm.parcelas, 10)||1, faturaCompetencia:competencia }]);
+    setSimForm(p=>({ modoParc:p.modoParc, parcelas:"", cartaoId:p.cartaoId, faturaCompetencia:"" }));
   };
   const delSim=(id)=>setSims(p=>p.filter(s=>s.id!==id));
   const refazerSim=(id)=>setSims(p=>p.map(s=>s.id===id?{...s, recalculatedAt:new Date().toISOString()}:s));
@@ -3043,7 +3164,7 @@ export default function App() {
                           {t.status==="previsto"?"Previsto":t.status==="parcial"?`Parcial (${fmtBRL(t.valorPago||0)})`:"Pago"}
                         </span>
                       </td>
-                      <td style={{ padding:"9px 13px", fontWeight:700, color:t.tipo==="receita"?C.emerald:C.text }}>{t.tipo==="receita"?"+":"-"}{fmtBRL(valorRealizado(t))}</td>
+                      <td style={{ padding:"9px 13px", fontWeight:700, color:t.tipo==="receita"?C.emerald:C.text }}>{t.tipo==="receita"?"+":"-"}{fmtBRL(valorExibicaoLancamento(t))}</td>
                       <td style={{ padding:"9px 13px", display:"flex", gap:5, alignItems:"center" }}>
                         {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.emerald })}>Baixar</button>}
                         {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarParcialTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Parcial</button>}
@@ -3176,7 +3297,7 @@ export default function App() {
                 </div>
                 {tc.length>0&&(
                   <table style={{ width:"100%", fontSize:12, borderCollapse:"collapse" }}>
-                    <thead><tr>{["Data","Descrição","Categoria","Valor"].map(h=><th key={h} style={{ textAlign:"left", color:C.soft, fontSize:10, padding:"3px 7px", borderBottom:`1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
+                    <thead><tr>{["Data","Descrição","Categoria","Valor","Ações"].map(h=><th key={h} style={{ textAlign:"left", color:C.soft, fontSize:10, padding:"3px 7px", borderBottom:`1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
                     <tbody>
                       {tc.map(t=>(
                         <tr key={t.id}>
@@ -3184,6 +3305,12 @@ export default function App() {
                           <td style={{ padding:"6px 7px" }}>{t.descricao}{t.natureza==="ajuste_fatura_cartao"&&<span style={{ marginLeft:3, fontSize:9, background:C.gold+"22", padding:"1px 4px", borderRadius:3, color:C.gold }}>ajuste</span>}{t.totalParcelas&&<span style={{ marginLeft:3, fontSize:9, background:C.gold+"22", padding:"1px 4px", borderRadius:3, color:C.gold }}>{t.parcela}/{t.totalParcelas}×</span>}</td>
                           <td style={{ padding:"6px 7px", minWidth:190 }}>{renderCategoryEditor(t, true)}</td>
                           <td style={{ padding:"6px 7px", fontWeight:700, color:signedCardAmount(t)<0?C.emerald:C.text }}>{signedCardAmount(t)<0?"-":""}{fmtBRL(Math.abs(signedCardAmount(t)))}</td>
+                          <td style={{ padding:"6px 7px" }}>
+                            <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                              <button onClick={()=>editarValorLancamentoCartao(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Editar valor</button>
+                              <button onClick={()=>excluirLancamentoCartao(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.coral })}>Excluir</button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -3458,13 +3585,13 @@ export default function App() {
                   <div><div style={lbl}>Categoria</div><CategorySelect cats={cats} value={simForm.catId} onChange={v=>setSimForm(f=>({...f,catId:v}))} validationInfo={requiredModal} fieldKey="simCatId"/></div>
                   <div><div style={lbl}>Modo</div><select style={inp} value={simForm.modoParc} onChange={e=>setSimForm(f=>({...f,modoParc:e.target.value}))}><option value="total">Valor total</option><option value="parcela">Vlr parcela</option></select></div>
                   <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inputStyle("simValor")} value={simForm.valor||""} onChange={value=>setSimForm(f=>({...f,valor:value}))}/></div>
-                  <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={1} max={48} value={simForm.parcelas||1} onChange={e=>setSimForm(f=>({...f,parcelas:e.target.value}))}/></div>
+                  <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={1} max={48} value={simForm.parcelas ?? ""} onChange={e=>setSimForm(f=>({...f,parcelas:e.target.value}))}/></div>
                   <div><div style={lbl}>Data 1ª</div><DateInput style={inputStyle("simData")} value={simForm.data||""} onChange={value=>setSimForm(f=>({...f,data:value}))}/></div>
                   <div><div style={lbl}>Competência 1ª fatura (opcional)</div><input style={inp} type="month" value={simForm.faturaCompetencia||""} onChange={e=>setSimForm(f=>({...f,faturaCompetencia:e.target.value}))}/><div style={{ fontSize:10, color:C.soft, marginTop:3 }}>{simForm.data&&simForm.cartaoId?`Automática: ${resolveCardCompetencia(simForm.data, simForm.cartaoId)}`:"Calculada pelo fechamento se vazio."}</div></div>
                 </div>
                 <div style={{ marginTop:11 }}><button onClick={addSim} style={btn(C.gold,{ color:C.navy })}>＋ Adicionar</button></div>
               </div>
-              {sims.length>0&&<div style={card()}><div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Simulações salvas</div>{sims.map(s=>{ const c=cards.find(c=>c.id===s.cartaoId); const n=parseInt(s.parcelas)||1; const vp=s.modoParc==="total"?moneyToNumber(s.valor)/n:moneyToNumber(s.valor); return (<div key={s.id} style={{ display:"flex", alignItems:"center", gap:9, background:C.navy, borderRadius:9, padding:"9px 13px", marginBottom:7, borderLeft:`3px solid ${C.gold}` }}><div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{s.descricao}</div><div style={{ fontSize:12, color:C.soft }}>{c?.nome} · impacto em {n} parcela{n>1?"s":""} · {n}× de {fmtBRL(vp)} · 1ª compra em {fmtDate(s.data)} · 1ª fatura {s.faturaCompetencia || resolveCardCompetencia(s.data, s.cartaoId)}{s.recalculatedAt?` · refeita em ${fmtDate(s.recalculatedAt.slice(0,10))}`:""}</div></div><span style={{ fontSize:10, background:getCatColor(s.catId)+"22", color:getCatColor(s.catId), padding:"2px 7px", borderRadius:20 }}>{getCatIcon(s.catId)} {getCatLabel(s.catId)}</span><button onClick={()=>refazerSim(s.id)} style={{ background:C.gold+"22", border:`1px solid ${C.gold}44`, borderRadius:5, color:C.gold, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Refazer</button><button onClick={()=>delSim(s.id)} style={{ background:C.coral+"22", border:`1px solid ${C.coral}44`, borderRadius:5, color:C.coral, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Excluir</button></div>); })}</div>}
+              {sims.length>0&&<div style={card()}><div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Simulações salvas</div>{sims.map(s=>{ const c=cards.find(c=>c.id===s.cartaoId); const n=parseInt(s.parcelas)||1; const vp=getSimulationInstallmentValue(s); return (<div key={s.id} style={{ display:"flex", alignItems:"center", gap:9, background:C.navy, borderRadius:9, padding:"9px 13px", marginBottom:7, borderLeft:`3px solid ${C.gold}` }}><div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{s.descricao}</div><div style={{ fontSize:12, color:C.soft }}>{c?.nome} · impacto em {n} parcela{n>1?"s":""} · {n}× de {fmtBRL(vp)} · 1ª compra em {fmtDate(s.data)} · 1ª fatura {s.faturaCompetencia || resolveCardCompetencia(s.data, s.cartaoId)}{s.recalculatedAt?` · refeita em ${fmtDate(s.recalculatedAt.slice(0,10))}`:""}</div></div><span style={{ fontSize:10, background:getCatColor(s.catId)+"22", color:getCatColor(s.catId), padding:"2px 7px", borderRadius:20 }}>{getCatIcon(s.catId)} {getCatLabel(s.catId)}</span><button onClick={()=>refazerSim(s.id)} style={{ background:C.gold+"22", border:`1px solid ${C.gold}44`, borderRadius:5, color:C.gold, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Refazer</button><button onClick={()=>delSim(s.id)} style={{ background:C.coral+"22", border:`1px solid ${C.coral}44`, borderRadius:5, color:C.coral, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Excluir</button></div>); })}</div>}
               {sims.length>0&&cards.map(c=>{ const sc=sims.filter(s=>s.cartaoId===c.id); if(!sc.length) return null; return (
                 <div key={c.id} style={card()}>
                   <div style={{ fontWeight:700, fontSize:13, marginBottom:12 }}>{c.nome} — Impacto por competência de fatura</div>
@@ -3679,7 +3806,7 @@ export default function App() {
                             ))}
                           </div>
                           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
-                            <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={2} max={48} value={form.parcelas||2} onChange={e=>setForm(f=>({...f,parcelas:e.target.value}))}/></div>
+                            <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={2} max={48} value={form.parcelas ?? ""} onChange={e=>setForm(f=>({...f,parcelas:e.target.value}))}/></div>
                             <div><div style={lbl}>Data 1ª parcela</div><DateInput style={inputStyle("data")} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
                           </div>
                           {form.valor&&form.parcelas&&(
