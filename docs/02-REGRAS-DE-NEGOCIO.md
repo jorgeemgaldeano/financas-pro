@@ -328,3 +328,124 @@ O backup do sistema deve preservar todos os dados necessários para restauraçã
 - Backup inválido ou incompatível não deve apagar dados atuais.
 - Backups antigos sem simulações devem continuar funcionando com lista vazia como fallback.
 - A restauração deve manter compatibilidade com as chaves atuais do LocalStorage.
+
+---
+
+## Atualização v0.3.26.2 — Importação de cartão: master lógico de parcelamento
+
+### RN-CARTAO-IMPORT-001 — Compra à vista
+
+Quando a linha importada de cartão de crédito não representar parcelamento, o sistema deve realizar a carga normalmente, observando as regras já existentes de duplicidade, validação de cartão, competência, fatura fechada e confirmação pelo usuário.
+
+### RN-CARTAO-IMPORT-002 — Master lógico do parcelamento
+
+Quando a linha importada representar compra parcelada, o sistema deve identificar o master lógico por:
+
+```txt
+cartão + descrição base normalizada + data da compra + valor da parcela com tolerância de R$ 0,10
+```
+
+A competência da fatura não deve ser usada como chave principal do parcelamento. Ela serve para posicionar cada parcela no mês correto.
+
+### RN-CARTAO-IMPORT-003 — Tolerância de valor
+
+Na comparação do valor da parcela, o sistema deve considerar equivalentes valores com diferença de até R$ 0,10 para mais ou para menos.
+
+Exemplo:
+
+```txt
+Valor importado: R$ 100,00
+Equivalentes: R$ 99,90 até R$ 100,10
+Não equivalentes: R$ 99,89 ou R$ 100,11
+```
+
+### RN-CARTAO-IMPORT-004 — Parcelamento já existente
+
+Se o master lógico já existir, o sistema deve validar se a parcela e o total de parcelas informados no arquivo correspondem ao que já existe no sistema.
+
+Se a parcela já existir, não deve importar novamente.
+
+Se o master existir, mas a parcela não existir, o sistema deve apontar divergência e não importar automaticamente.
+
+Se o total de parcelas divergir, o sistema deve apontar divergência e não importar automaticamente.
+
+### RN-CARTAO-IMPORT-005 — Parcelamento novo
+
+Se o master lógico não existir, o sistema deve criar o parcelamento, incluindo a parcela da competência atual e as parcelas futuras/subsequentes conforme o total de parcelas informado.
+
+### RN-CARTAO-IMPORT-006 — Compras semelhantes no mesmo local e data
+
+O sistema deve permitir compras diferentes realizadas no mesmo estabelecimento, na mesma data e com o mesmo número de parcela, desde que o valor da parcela seja diferente acima da tolerância de R$ 0,10.
+
+---
+
+## Atualização v0.3.26.3 — Duplicidade entre parcelas futuras geradas
+
+Na importação de cartão, compras parceladas não devem ser comparadas pela mesma chave de compras à vista quando a prévia contém parcelas futuras geradas automaticamente.
+
+### Regra
+
+- Compra à vista: validar duplicidade por cartão, data, descrição e valor.
+- Compra parcelada: validar duplicidade por master lógico, número da parcela e total de parcelas.
+
+### Justificativa
+
+Todas as parcelas futuras de uma compra parcelada compartilham a mesma data da compra, descrição base e valor. Usar esses campos isoladamente faz as parcelas 2/N em diante serem marcadas como duplicadas indevidamente.
+
+## Atualização RN016/RN015 — v0.3.26.4 — Fatura subsequente de cartão
+
+Quando uma compra parcelada já tiver sido criada em carga anterior, a importação de fatura subsequente deve reconhecer as parcelas futuras já existentes.
+
+A regra principal do master lógico continua sendo:
+
+```txt
+cartão + descrição base normalizada + data da compra + valor da parcela com tolerância de R$ 0,10
+```
+
+Como alguns emissores podem alterar data ou descrição entre faturas, a validação complementar de fatura subsequente passa a ser:
+
+```txt
+cartão + competência + número da parcela + total de parcelas + valor aproximado + descrição compatível
+```
+
+Critérios:
+
+- Se a parcela da competência já existir, a linha importada deve ser marcada como existente/duplicada.
+- Se houver diferença de valor maior que R$ 0,10, não deve ser considerada a mesma parcela.
+- Se a descrição não for compatível, não deve ser considerada a mesma parcela automaticamente.
+- Se o lançamento for realmente novo, deve continuar selecionado para importação.
+- Não há alteração estrutural de LocalStorage.
+
+
+## Atualização RN015/RN016 — v0.3.26.5 — Divergência de parcelas na importação de cartão
+
+Compras parceladas importadas de cartão devem considerar tolerância de valor de R$ 0,05 para mais ou para menos.
+
+Quando um parcelamento já existir e o arquivo trouxer parcela divergente da prevista para a competência, o sistema deve:
+
+- listar a divergência para análise manual;
+- não importar automaticamente a linha divergente;
+- permitir correção manual da parcela atual e das subsequentes do mesmo grupo;
+- preservar o `parcelaGrupo`;
+- atualizar apenas campos já existentes dos lançamentos, sem nova chave de LocalStorage.
+
+---
+
+## Atualização v0.3.26.6 — Divergência de parcela na importação de cartão
+
+Quando a importação de cartão identificar que um parcelamento já existe, mas a parcela informada no arquivo diverge da parcela gravada no sistema para a mesma competência, o sistema deve tratar o caso como divergência de parcelamento.
+
+### Regra
+
+- A linha divergente não deve ser importada automaticamente.
+- O sistema não deve criar nova parcela final automaticamente.
+- O sistema deve listar a divergência para análise manual.
+- O usuário deve visualizar quais parcelas podem ser impactadas.
+- O usuário pode escolher uma das ações:
+  1. manter como está;
+  2. alterar somente a parcela da competência atual;
+  3. alterar a parcela atual e as subsequentes.
+
+### LocalStorage
+
+Sem nova chave obrigatória. Alterações confirmadas pelo usuário atualizam apenas campos já existentes ou opcionais nos lançamentos do cartão.

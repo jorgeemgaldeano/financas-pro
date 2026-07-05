@@ -658,3 +658,368 @@ Sem impacto estrutural.
 ### Impacto em regra de negócio
 
 Médio/alto na interpretação da aba Projeções. Não altera regras de lançamento, fatura ou baixa.
+
+## DEC-0021 — Detalhamento expansível das projeções
+
+Data: 2026-07-04
+
+### Contexto
+
+A `v0.3.20` substituiu a projeção genérica por fluxo de caixa real, porém os totais ainda precisavam ser auditáveis pelo usuário.
+
+### Decisão
+
+Adicionar detalhamento expansível por competência na aba Projeções, agrupando os itens por receitas, despesas, faturas e simulações.
+
+### Alternativas avaliadas
+
+- Manter apenas totais consolidados.
+- Criar uma nova tela de auditoria de projeção.
+- Adicionar expansão diretamente na tabela de Projeções.
+
+### Consequências positivas
+
+- Melhora a rastreabilidade dos números.
+- Facilita conferência manual.
+- Evita criar nova tela neste momento.
+- Preserva a estrutura de persistência.
+
+### Consequências negativas ou riscos
+
+- A tabela fica visualmente mais densa.
+- Meses com muitos itens podem exigir refinamento posterior.
+
+### Impacto em LocalStorage
+
+Nenhum.
+
+### Impacto em regra de negócio
+
+Baixo. A regra de cálculo da `v0.3.20` foi preservada; a mudança é de rastreabilidade e exibição.
+
+
+## DEC-0021 — Reduzir detalhamento visual das Projeções
+
+Data: 2026-07-04
+
+### Contexto
+
+O detalhamento de receitas e despesas na aba Projeções pode gerar excesso de informação e dificultar a análise.
+
+### Decisão
+
+Manter receitas e despesas nos totais mensais, mas restringir o detalhamento expansível a Cartões/Faturas e Simulações.
+
+### Impacto em LocalStorage
+
+Nenhum.
+
+### Impacto em regra de negócio
+
+Baixo. A regra de cálculo foi preservada; a alteração é de apresentação.
+
+## DEC-0015 — Projeções com filtros, indicadores e recorrências analíticas
+
+Data: 2026-07-04
+
+### Contexto
+
+A aba Projeções evoluiu para fluxo de caixa real, mas precisava permitir análise por filtros e leitura gerencial do período. Também havia necessidade de considerar recorrências existentes sem criar um novo modelo persistido antes de validação funcional.
+
+### Decisão
+
+Consolidar na `v0.3.22` filtros avançados, indicadores analíticos e projeção conservadora de recorrências a partir de lançamentos marcados como `fixo: true`.
+
+### Alternativas avaliadas
+
+- Criar modelo novo de recorrências com persistência.
+- Manter apenas lançamentos já existentes, sem projeção futura.
+- Criar projeção analítica de recorrências sem gravar dados.
+
+### Decisão aplicada
+
+Usar projeção analítica sem alterar LocalStorage.
+
+### Consequências positivas
+
+- Melhora a utilidade da aba Projeções.
+- Evita migração prematura.
+- Permite validar a lógica de recorrência antes de criar modelo persistido.
+- Mantém o aplicativo executável e compatível com dados existentes.
+
+### Consequências negativas ou riscos
+
+- Recorrências projetadas são inferidas por `fixo: true`, não por um modelo formal de recorrência.
+- Pode ser necessário revisar futuramente casos de recorrências mais complexas.
+- Filtros por categoria não representam faturas agregadas, pois faturas não possuem categoria única.
+
+### Impacto em LocalStorage
+
+Nenhum.
+
+### Impacto em regra de negócio
+
+Médio. Altera a leitura funcional da aba Projeções, mas não altera dados gravados nem regras de fechamento, baixa ou fatura.
+
+## DEC-0023 — Projetar recorrências previstas sem alterar LocalStorage
+
+Data: 2026-07-04
+
+### Contexto
+
+Na `v0.3.22`, o filtro **Projetar recorrências** não apresentava efeito prático suficiente, pois removia apenas recorrências inferidas dinamicamente, mas não removia lançamentos fixos/recorrentes previstos já materializados no array de transações.
+
+### Decisão
+
+A projeção passa a diferenciar recorrências previstas de recorrências já realizadas. Ao desmarcar **Projetar recorrências previstas**, o sistema remove apenas recorrências ainda previstas da projeção analítica, preservando valores já pagos ou recebidos.
+
+### Alternativas avaliadas
+
+- Criar modelo formal de recorrência com nova estrutura persistida.
+- Remover todas as recorrências, inclusive realizadas.
+- Corrigir apenas a camada de projeção, sem alterar persistência.
+
+### Decisão adotada
+
+Corrigir apenas a camada de projeção, sem alterar LocalStorage.
+
+### Consequências positivas
+
+- Corrige o filtro sem migração.
+- Evita perda de dados.
+- Mantém histórico realizado no cálculo.
+- Preserva estabilidade das versões anteriores.
+
+### Consequências negativas ou riscos
+
+- Ainda não cria um modelo formal de recorrência.
+- A identificação depende dos campos atuais `fixo`, `recorrenciaId` e `parcelaGrupo`.
+
+### Impacto em LocalStorage
+
+Nenhum.
+
+### Impacto em regra de negócio
+
+Médio, restrito à interpretação da projeção analítica.
+
+
+## DEC-00XX — Duplicidade estrita em importações
+
+Data: 2026-07-04
+
+### Contexto
+
+A importação bancária e de cartão permitia duplicidade quando registros já existentes eram carregados novamente.
+
+### Decisão
+
+Adicionar validação conservadora por destino, data, descrição normalizada, valor e tipo, executada na prévia e na confirmação da importação.
+
+### Impacto em LocalStorage
+
+Sem impacto.
+
+### Impacto em regra de negócio
+
+Médio. Protege a integridade dos lançamentos importados e evita distorção em saldo, fatura e projeções.
+
+## DEC — Duplicidade complementar em cartão e Pluxee
+
+Data: 2026-07-04
+
+### Contexto
+
+A validação por data, descrição e valor funcionou para extrato bancário, mas ainda havia falso negativo em cartão de crédito, especialmente quando registros podiam usar `data` e `dataCompra`. O Pluxee também precisava da mesma proteção.
+
+### Decisão
+
+Gerar candidatos de chave de duplicidade considerando `dataCompra` e `data`, com destino, descrição normalizada, valor e tipo. Aplicar a mesma estratégia para cartão e Pluxee.
+
+### Impacto em LocalStorage
+
+Nenhum.
+
+### Impacto em regra de negócio
+
+Médio, restrito à prevenção de duplicidade em importações.
+
+---
+
+## v0.3.25 — Controle interno de parcelamentos de cartão
+
+- Criado controle lógico de parcelamento 1:N na importação de cartão.
+- Parcelas futuras já previstas deixam de ser importadas novamente.
+- Divergências de parcelamento passam a ser apontadas no relatório da importação.
+- Campos opcionais `parcelaGrupo` e `descricaoBaseParcelamento` são aplicados a novos lançamentos parcelados.
+- Sem alteração de chaves do LocalStorage e sem migração obrigatória.
+
+---
+
+## DEC-v0.3.26.2 — Master lógico de parcelamento com tolerância de valor
+
+**Data:** 2026-07-04
+
+### Contexto
+
+A importação de cartão ainda apresentava inconsistências em compras parceladas. A identificação apenas por descrição e data da compra não era suficiente, pois o usuário pode realizar duas compras no mesmo local, na mesma data, com o mesmo número de parcelas, mas com valores diferentes.
+
+### Decisão
+
+O master lógico do parcelamento será identificado por:
+
+```txt
+cartão + descrição base normalizada + data da compra + valor da parcela com tolerância de R$ 0,10
+```
+
+### Justificativa
+
+A inclusão do valor da parcela evita misturar compras diferentes. A tolerância de R$ 0,10 reduz falsos negativos causados por arredondamentos, diferenças de centavos ou formatação dos arquivos importados.
+
+### Impacto em LocalStorage
+
+Nenhuma nova chave obrigatória, nenhuma migração e nenhuma alteração estrutural.
+
+### Escopo
+
+Aplica-se somente à importação de cartão de crédito.
+
+### Fora do escopo
+
+Fechamento de fatura, pagamento previsto, baixa parcial, projeções e layout.
+
+---
+
+## DEC — Separar duplicidade de compra à vista e compra parcelada
+
+Data: 2026-07-04
+
+### Contexto
+
+A primeira carga de uma compra parcelada em cartão sem histórico gerava as parcelas futuras, mas as parcelas subsequentes eram marcadas como duplicadas na prévia.
+
+### Decisão
+
+A chave estrita de compra à vista não será aplicada a compras parceladas. Para parcelamento, a duplicidade será validada por master lógico, parcela e total de parcelas.
+
+### Impacto LocalStorage
+
+Sem alteração estrutural e sem migração.
+
+## DEC-00XX — Validação complementar de fatura subsequente por competência
+
+Data: 2026-07-04
+
+### Contexto
+
+A primeira carga de compras parceladas passou a gerar corretamente parcelas futuras, mas a fatura subsequente podia não reconhecer essas parcelas caso o arquivo do emissor apresentasse data ou descrição diferente da primeira carga.
+
+### Decisão
+
+Manter a regra principal do master lógico por cartão, descrição base, data da compra e valor aproximado, mas adicionar uma validação complementar para faturas subsequentes por competência, número da parcela, total de parcelas, valor aproximado e descrição compatível.
+
+### Alternativas avaliadas
+
+- Usar somente data da compra e descrição exata: descartado por gerar falso negativo em faturas subsequentes.
+- Ignorar totalmente data e descrição: descartado por aumentar risco de falso positivo.
+- Usar competência + parcela/total + valor + descrição compatível: adotado como fallback conservador.
+
+### Consequências positivas
+
+- Reconhece parcelas futuras já criadas mesmo com pequenas variações do arquivo.
+- Preserva a primeira carga funcionando.
+- Evita duplicidade em fatura subsequente.
+
+### Consequências negativas ou riscos
+
+- Pode exigir ajuste futuro de compatibilidade de descrição para emissores com descrições muito diferentes.
+- Ainda depende de valor aproximado e competência correta.
+
+### Impacto em LocalStorage
+
+Sem impacto estrutural. Nenhuma migração necessária.
+
+### Impacto em regra de negócio
+
+Médio. A importação de cartão passa a ter fallback específico para fatura subsequente.
+
+
+---
+
+## DEC-0026 — Tolerância de R$ 0,05 e correção manual de sequência de parcelas
+
+Data: 2026-07-04
+
+### Contexto
+
+A importação de faturas subsequentes pode encontrar divergência entre a parcela prevista no sistema e a parcela informada pela administradora do cartão. Exemplo: o sistema possui 03/10 na competência, mas o arquivo informa 02/10.
+
+### Decisão
+
+Reduzir a tolerância de valor de R$ 0,10 para R$ 0,05 e permitir que divergências corrigíveis sejam ajustadas manualmente pelo usuário na prévia da importação.
+
+### Consequências positivas
+
+- Reduz falso positivo entre compras com valores próximos.
+- Evita importação automática incorreta.
+- Permite corrigir sequência de parcelas quando a administradora pulou ou repetiu parcela.
+
+### Consequências negativas ou riscos
+
+- A correção manual altera lançamentos já gravados.
+- Exige confirmação e teste cuidadoso antes de avançar com a importação.
+
+### Impacto em LocalStorage
+
+Sem nova chave e sem migração. A ação manual altera campos já existentes em lançamentos do cartão.
+
+### Impacto em regra de negócio
+
+Alto para importação de cartão, pois adiciona fluxo de análise e correção manual de divergência de parcelamento.
+
+---
+
+## DEC-0026 — Painel de divergências de parcelamento
+
+Data: 2026-07-04
+
+### Contexto
+
+A importação de cartão passou a detectar divergência entre a parcela gravada no sistema e a parcela informada no arquivo. Porém, a correção automática poderia alterar indevidamente a sequência ou gerar comportamento inesperado.
+
+### Decisão
+
+Divergências de parcela serão tratadas em painel próprio no final da página de revisão da importação. Nenhuma alteração será aplicada automaticamente.
+
+O usuário poderá:
+
+- manter como está;
+- alterar somente a parcela da competência atual;
+- alterar a parcela atual e as subsequentes.
+
+### Alternativas avaliadas
+
+- Corrigir automaticamente a sequência.
+- Criar nova parcela final automaticamente.
+- Bloquear tudo sem ação de correção.
+- Criar painel de decisão manual.
+
+### Consequências positivas
+
+- Reduz risco de alteração indevida.
+- Dá controle explícito ao usuário.
+- Preserva dados já gravados até confirmação.
+- Evita criação automática de parcela final.
+
+### Consequências negativas ou riscos
+
+- A importação exige mais uma etapa de análise quando houver divergência.
+- A correção manual altera lançamentos já persistidos e deve ser validada com cuidado.
+
+### Impacto em LocalStorage
+
+Sem nova chave e sem migração. Apenas campos opcionais de rastreabilidade podem ser gravados nos lançamentos alterados.
+
+### Impacto em regra de negócio
+
+Alto para importação de cartão, pois define o comportamento correto para divergências de sequência de parcelas.

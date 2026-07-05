@@ -725,3 +725,128 @@ Iniciar desenho técnico de SQL somente após:
 ### Próximo passo sugerido após aprovação
 
 - `v0.3.20` — preparação conservadora para Vercel Preview, mantendo LocalStorage e sem backend.
+
+## Atualização — v0.3.21
+
+### Concluído
+
+- [x] Adicionar detalhamento expansível na aba Projeções.
+- [x] Exibir itens por origem: receitas, despesas, faturas e simulações.
+- [x] Manter cálculo de fluxo de caixa da `v0.3.20` sem alteração estrutural.
+
+### Próximos itens sugeridos
+
+- [ ] Adicionar filtros de Projeções por origem, conta, cartão e categoria.
+- [ ] Permitir detalhamento completo quando houver mais de 8 itens por grupo.
+- [ ] Melhorar auditoria de duplicidade entre fatura e despesas de cartão.
+
+
+## Atualização — v0.3.21.1
+
+- [x] Ajustar filtros de período em Projeções para formato `MM/AA`.
+- [x] Reduzir poluição visual do detalhamento de Projeções.
+- [x] Manter detalhamento apenas para Cartões/Faturas e Simulações.
+
+## Atualização — v0.3.22
+
+### Concluído
+
+- [x] Filtros avançados em Projeções por origem, conta, cartão e categoria.
+- [x] Opções para incluir/excluir simulações e recorrências projetadas.
+- [x] Indicadores analíticos do fluxo de caixa.
+- [x] Projeção analítica de recorrências baseada em `fixo: true`, sem alterar LocalStorage.
+
+### Próximos pontos recomendados
+
+- [ ] Validar a `v0.3.22` com dados reais.
+- [ ] Avaliar necessidade de modelo formal de recorrências.
+- [ ] Revisar lançamentos previstos e baixa parcial em fluxo completo.
+- [ ] Consolidar critérios para Vercel Preview após estabilização das projeções.
+
+## Atualização — v0.3.23
+
+### Concluído
+
+- [x] Corrigir funcionamento do filtro **Projetar recorrências previstas** em Projeções.
+- [x] Preservar valores recorrentes já realizados no cálculo.
+- [x] Remover recorrências previstas da projeção quando o filtro estiver desmarcado.
+
+### Pendência futura
+
+- [ ] Criar modelo formal de recorrências em versão futura, com análise de impacto em LocalStorage e migração.
+
+
+## Atualização v0.3.24
+
+- Corrigir duplicidade na importação bancária.
+- Corrigir duplicidade na importação de cartão/fatura.
+- Validar data, descrição e valor antes de carregar/salvar registros importados.
+
+## Atualização — v0.3.24.1
+
+- [x] Corrigir duplicidade remanescente na importação de cartão de crédito.
+- [x] Aplicar validação de duplicidade ao Pluxee/vale.
+- [x] Ajustar botão Sel. tudo para não selecionar duplicatas.
+
+---
+
+## v0.3.25 — Controle interno de parcelamentos de cartão
+
+- Criado controle lógico de parcelamento 1:N na importação de cartão.
+- Parcelas futuras já previstas deixam de ser importadas novamente.
+- Divergências de parcelamento passam a ser apontadas no relatório da importação.
+- Campos opcionais `parcelaGrupo` e `descricaoBaseParcelamento` são aplicados a novos lançamentos parcelados.
+- Sem alteração de chaves do LocalStorage e sem migração obrigatória.
+
+---
+
+## Atualização de roadmap — Pós v0.3.26.2
+
+### Status
+
+A etapa de isolamento inicial do cartão permanece em validação, com foco na importação de compras parceladas.
+
+### Próxima etapa somente após aprovação da v0.3.26.2
+
+```txt
+v0.3.27 — Isolamento de fatura de cartão
+```
+
+### Não avançar antes de validar
+
+- Cartão vazio + parcelamento novo.
+- Fatura futura com parcela já existente.
+- Parcelamentos semelhantes com valores diferentes.
+- Tolerância de R$ 0,10.
+- Regressão da importação bancária e vale.
+
+
+## Atualização de backlog — v0.3.26.5 — Importação de cartão
+
+### Concluído nesta versão
+
+- [x] Reduzir margem de equivalência de valor da parcela para R$ 0,05.
+- [x] Listar divergência entre parcela prevista no sistema e parcela informada no arquivo.
+- [x] Bloquear importação automática de parcelas divergentes.
+- [x] Permitir correção manual da parcela atual e subsequentes do mesmo grupo.
+
+### Próxima prioridade
+
+- [ ] Validar manualmente primeira carga, reimportação, fatura subsequente e divergência de parcela.
+- [ ] Após aprovação, avançar para isolamento de fatura de cartão na v0.3.27.
+
+---
+
+## Atualização de backlog — v0.3.26.6
+
+### Concluído
+
+- [x] Criar painel de divergências de parcelamento na importação de cartão.
+- [x] Bloquear importação automática de parcela divergente.
+- [x] Permitir decisão manual: manter, alterar somente atual, alterar atual e futuras.
+- [x] Evitar criação automática de nova última parcela ao corrigir sequência.
+
+### Próxima prioridade
+
+- [ ] Validar manualmente o painel de divergências com caso real de fatura subsequente.
+- [ ] Após aprovação, avançar para isolamento da fatura de cartão.

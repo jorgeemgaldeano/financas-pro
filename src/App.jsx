@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { Fragment, useState, useMemo, useCallback, useEffect } from "react";
 import { RequiredFieldModal, requiredFieldInfo, highlightIfRequired } from "./components/ui/RequiredFieldModal.jsx";
 import { DateInput } from "./components/ui/DateInput.jsx";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
@@ -9,14 +9,17 @@ import { useLS, lsSave } from "./hooks/useLocalStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
-import { buildRealCashFlowProjection } from "./services/projectionService.js";
+import { buildProjectionInsights, buildRealCashFlowProjection } from "./services/projectionService.js";
 import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
+import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
+import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
+import { buildCardImportDuplicateSet, prepareCardImportRows, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.20";
+const APP_VERSION = "0.3.26.6";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -272,6 +275,119 @@ const saldoPendente = (t) => Math.max(0, (Number(t.valor) || 0) - (Number(t.valo
 
 const valorExibicaoLancamento = (t) => roundMoney(Number(t?.valor) || Number(t?.amount) || valorRealizado(t));
 
+const normalizeImportDescriptionForDuplicate = (value) => normText(String(value || "").replace(/\s+/g, " ").trim());
+
+const normalizeImportAmountForDuplicate = (record) => roundMoney(Number(record?.valor ?? record?.amount ?? 0));
+
+const normalizeImportTypeForDuplicate = (record, mode) => record?.tipo || (mode === "cartao" ? "despesa" : "");
+
+function uniqueNonEmpty(values) {
+  return Array.from(new Set(values.map(value => String(value || "").trim()).filter(Boolean)));
+}
+
+function getImportDuplicateDateCandidates(record) {
+  return uniqueNonEmpty([
+    record?.dataCompra,
+    record?.data,
+    record?.date,
+    record?.dt,
+  ].map(value => String(value || "").slice(0, 10)));
+}
+
+function stripInstallmentMarkersFromDescription(value) {
+  return String(value || "")
+    .replace(/\bparc(?:ela)?\s*\d+\s*(?:de|\/)\s*\d+\b/gi, " ")
+    .replace(/\bparc\.\s*\d+\s*(?:de|\/)\s*\d+\b/gi, " ")
+    .replace(/\b\d{1,2}\s*\/\s*\d{1,2}\b/g, " ")
+    .replace(/\b\d{1,2}\s+de\s+\d{1,2}\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getInstallmentInfoFromDescription(value) {
+  const text = String(value || "").toLowerCase();
+  const patterns = [
+    /\bparc(?:ela)?\s*(\d{1,2})\s*(?:de|\/)\s*(\d{1,2})\b/i,
+    /\bparc\.\s*(\d{1,2})\s*(?:de|\/)\s*(\d{1,2})\b/i,
+    /\b(\d{1,2})\s*\/\s*(\d{1,2})\b/,
+    /\b(\d{1,2})\s+de\s+(\d{1,2})\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const parcela = parseInt(match[1], 10);
+    const totalParcelas = parseInt(match[2], 10);
+    if (Number.isFinite(parcela) && Number.isFinite(totalParcelas) && parcela >= 1 && totalParcelas >= parcela && totalParcelas > 1) {
+      return { parcela, totalParcelas };
+    }
+  }
+  return { parcela:null, totalParcelas:null };
+}
+
+function getImportInstallmentInfo(record) {
+  const parsed = getInstallmentInfoFromDescription(record?.descricao || record?.description || "");
+  const parcela = parseInt(record?.parcela ?? parsed.parcela, 10);
+  const totalParcelas = parseInt(record?.totalParcelas ?? record?.parcelas ?? parsed.totalParcelas, 10);
+  if (Number.isFinite(parcela) && Number.isFinite(totalParcelas) && parcela >= 1 && totalParcelas >= parcela && totalParcelas > 1) {
+    return { parcela, totalParcelas };
+  }
+  return { parcela:null, totalParcelas:null };
+}
+
+function getImportDuplicateDescriptionCandidates(record) {
+  const base = String(record?.descricao || record?.description || "");
+  const normalized = normalizeImportDescriptionForDuplicate(base);
+  const semParcela = normalizeImportDescriptionForDuplicate(stripInstallmentMarkersFromDescription(base));
+  return uniqueNonEmpty([normalized, semParcela]);
+}
+
+function buildStrictImportDuplicateKeyCandidates(record, { mode, destinationId }) {
+  const scope = mode === "cartao" ? `cartao:${destinationId || ""}` : `conta:${destinationId || ""}:${mode || ""}`;
+  const dates = getImportDuplicateDateCandidates(record);
+  const descriptions = getImportDuplicateDescriptionCandidates(record);
+  const valor = normalizeImportAmountForDuplicate(record).toFixed(2);
+  const tipo = normalizeImportTypeForDuplicate(record, mode);
+  const keys = [];
+  dates.forEach(data => {
+    descriptions.forEach(descricao => {
+      keys.push(`${scope}|${data}|${descricao}|${valor}|${tipo}`);
+    });
+  });
+  return uniqueNonEmpty(keys);
+}
+
+function buildCardInstallmentDuplicateKeyCandidates(record, { cartaoId }) {
+  const { parcela, totalParcelas } = getImportInstallmentInfo(record);
+  if (!cartaoId || !parcela || !totalParcelas) return [];
+  const valor = normalizeImportAmountForDuplicate(record).toFixed(2);
+  const descriptions = getImportDuplicateDescriptionCandidates(record);
+  return uniqueNonEmpty(descriptions.map(descricao => `cartao:${cartaoId}|parcelamento|${descricao}|${valor}|${parcela}/${totalParcelas}`));
+}
+
+function buildImportDuplicateKeyCandidates(record, { mode, destinationId }) {
+  const keys = buildStrictImportDuplicateKeyCandidates(record, { mode, destinationId });
+  if (mode === "cartao") keys.push(...buildCardInstallmentDuplicateKeyCandidates(record, { cartaoId:destinationId }));
+  return uniqueNonEmpty(keys);
+}
+
+function buildStrictImportDuplicateKey(record, { mode, destinationId }) {
+  return buildStrictImportDuplicateKeyCandidates(record, { mode, destinationId })[0] || "";
+}
+
+function buildExistingImportDuplicateKeys(transactions, { mode, contaId, cartaoId }) {
+  const destinationId = mode === "cartao" ? cartaoId : contaId;
+  const keys = [];
+  (transactions || [])
+    .filter(item => mode === "cartao"
+      ? item?.cartaoId === cartaoId
+      : item?.contaId === contaId && item?.origem !== "cartao")
+    .forEach(item => {
+      keys.push(...buildImportDuplicateKeyCandidates(item, { mode, destinationId }));
+    });
+  return new Set(keys);
+}
+
+
 function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
   return (
     <input
@@ -282,6 +398,75 @@ function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
       placeholder={placeholder}
       value={value || ""}
       onChange={e=>onChange(maskMoneyInput(e.target.value))}
+    />
+  );
+}
+
+function formatMonthShort(monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return "";
+  const [year, month] = monthKey.split("-");
+  return `${month}/${year.slice(2)}`;
+}
+
+function parseMonthShort(text) {
+  const digits = String(text || "").replace(/\D/g, "").slice(0, 4);
+  if (digits.length !== 4) return null;
+
+  const month = parseInt(digits.slice(0, 2), 10);
+  const yearSuffix = parseInt(digits.slice(2, 4), 10);
+
+  if (!Number.isFinite(month) || month < 1 || month > 12 || !Number.isFinite(yearSuffix)) {
+    return null;
+  }
+
+  const year = 2000 + yearSuffix;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function maskMonthShort(text) {
+  const digits = String(text || "").replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+}
+
+function MonthShortInput({ value, onChange, style, ...props }) {
+  const [text, setText] = useState(formatMonthShort(value));
+
+  useEffect(() => {
+    setText(formatMonthShort(value));
+  }, [value]);
+
+  const commit = (nextText = text) => {
+    const parsed = parseMonthShort(nextText);
+    if (parsed) {
+      onChange(parsed);
+      setText(formatMonthShort(parsed));
+      return;
+    }
+    setText(formatMonthShort(value));
+  };
+
+  return (
+    <input
+      {...props}
+      type="text"
+      inputMode="numeric"
+      maxLength={5}
+      placeholder="MM/AA"
+      value={text}
+      style={{ ...style, width:78, minWidth:78, textAlign:"center" }}
+      onChange={e => {
+        const masked = maskMonthShort(e.target.value);
+        setText(masked);
+        const parsed = parseMonthShort(masked);
+        if (parsed) onChange(parsed);
+      }}
+      onBlur={() => commit()}
+      onKeyDown={e => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        }
+      }}
     />
   );
 }
@@ -1831,6 +2016,15 @@ export default function App() {
   const [projectionYear, setProjectionYear] = useState(String(Y));
   const [projectionStartMonth, setProjectionStartMonth] = useState(selMonth);
   const [projectionEndMonth, setProjectionEndMonth] = useState(monthOffset(selMonth, Math.max(1, parseInt(params.mesesProjecao, 10) || 3) - 1));
+  const [projectionFilters, setProjectionFilters] = useState({
+    origin:"todos",
+    accountId:"",
+    cardId:"",
+    rootCatId:"",
+    includeSimulations:true,
+    includeRecurrences:true,
+  });
+  const [expandedProjectionMonths, setExpandedProjectionMonths] = useState({});
 
   useEffect(() => {
     const primeiraCC = contas.find(c => c.tipo === "corrente")?.id || contas[0]?.id || "cc1";
@@ -1909,6 +2103,12 @@ export default function App() {
   const getCatColor = useCallback((id)=>catColor(cats,id),[cats]);
   const getCatIcon  = useCallback((id)=>catIcon(cats,id),[cats]);
   const getCatLabel = useCallback((id)=>catLabel(cats,id),[cats]);
+  const projectionCategoryIds = useMemo(() => {
+    if (!projectionFilters.rootCatId) return [];
+    const root = findCat(cats, projectionFilters.rootCatId);
+    if (!root) return [projectionFilters.rootCatId];
+    return flattenCats([root]).map(cat => cat.id);
+  }, [cats, projectionFilters.rootCatId]);
 
   const catBreakdown = useMemo(()=>{
     const map={};
@@ -1965,10 +2165,18 @@ export default function App() {
     getInitialBalanceForMonth: monthKey => contas.reduce((sum, conta) => sum + getSaldoInicialConta(conta, monthKey), 0),
     getCardInvoiceTotal: (card, monthKey) => calcularFaturaCartao(card, monthKey).total,
     getInvoiceId: invoiceIdFor,
+    filters: {
+      origin: projectionFilters.origin,
+      accountId: projectionFilters.accountId,
+      cardId: projectionFilters.cardId,
+      categoryIds: projectionCategoryIds,
+      includeSimulations: projectionFilters.includeSimulations,
+      includeRecurrences: projectionFilters.includeRecurrences,
+    },
   }), [
     trans, cards, faturas, simTrans, projectionMode, projectionYear,
     projectionStartMonth, projectionEndMonth, selMonth, params.mesesProjecao,
-    contas, getSaldoInicialConta, calcularFaturaCartao
+    contas, getSaldoInicialConta, calcularFaturaCartao, projectionFilters, projectionCategoryIds
   ]);
 
   const projectionTotals = useMemo(() => projections.reduce((acc, item) => ({
@@ -1982,6 +2190,7 @@ export default function App() {
 
   const projectionFirst = projections[0];
   const projectionLast = projections[projections.length - 1];
+  const projectionInsights = useMemo(() => buildProjectionInsights(projections), [projections]);
 
   // Styles
   const card  = (x={})=>({ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:"18px 22px", ...x });
@@ -2685,22 +2894,39 @@ export default function App() {
         else if(ext==="ofx"||ext==="qfx"||t.includes("<STMTTRN>")) rows=parseOFX(t, { mode:"cartao", bancoImportacao: impBanco, categorize: categorizeImportRow, createId: uid });
         else rows=parseCardCSV(t, { categorize: categorizeImportRow, createId: uid });
       }catch(err){ setImpErr("Erro: "+err.message); return; }
-      rows=expandImportedRows(rows, { impCompetencia, createId: uid });
+      if(impMode === "cartao") {
+        // v0.3.26.5: identifica o master lógico antes da expansão e evita falso duplicado entre parcelas futuras.
+        // Regra: cartão + descrição base + data da compra + valor da parcela com tolerância de R$ 0,05.
+        // Linhas que já pertencem a master existente não devem ser expandidas novamente.
+        const preparedRows = prepareCardImportRows(rows, { transactions:trans, cartaoId:impCId });
+        const { expandable, blocked } = splitCardRowsForExpansion(preparedRows);
+        const expandedRows = expandImportedRows(expandable, { impCompetencia, createId: uid });
+        rows = prepareCardImportRows([...expandedRows, ...blocked], { transactions:trans, cartaoId:impCId });
+      } else {
+        rows=expandImportedRows(rows, { impCompetencia, createId: uid });
+      }
       if(!rows.length){ setImpErr(ignoredRows.length ? `Nenhuma transação importável encontrada. ${ignoredRows.length} linha(s) foram ignoradas por regra de importação.` : "Nenhuma transação encontrada."); return; }
-      const exactKeys=impMode!=="cartao"
-        ? new Set(trans.filter(t2=>t2.contaId===impContaId&&t2.origem!=="cartao").map(t2=>buildImportKey({ ...t2, importTipo:impMode }, t2.contaId, mKey(t2.data), impMode)))
-        : new Set(trans.filter(t2=>t2.cartaoId===impCId).map(t2=>buildImportKey({ ...t2, importTipo:"cartao" }, t2.cartaoId, transMonthKey(t2), "cartao")));
-      const legacyKeys=impMode!=="cartao"
-        ? new Set(trans.filter(t2=>t2.contaId===impContaId&&t2.origem!=="cartao").map(t2=>buildLegacyImportKey({ ...t2, importTipo:impMode }, t2.contaId, impMode)))
-        : new Set(trans.filter(t2=>t2.cartaoId===impCId).map(t2=>buildLegacyImportKey({ ...t2, importTipo:"cartao" }, t2.cartaoId, "cartao")));
-      const seen=new Set();
-      const dups=new Set();
-      rows.forEach(r2=>{
-        const exact=buildImportKey(r2);
-        const legacy=buildLegacyImportKey(r2);
-        if(exactKeys.has(exact)||legacyKeys.has(legacy)||seen.has(exact)) dups.add(r2._id);
-        seen.add(exact);
-      });
+      const destinationId = impMode === "cartao" ? impCId : impContaId;
+      let dups;
+      if(impMode === "cartao") {
+        dups = buildCardImportDuplicateSet(rows, { transactions:trans, cartaoId:impCId });
+      } else {
+        const exactKeys = new Set(trans.filter(t2=>t2.contaId===impContaId&&t2.origem!=="cartao").map(t2=>buildImportKey({ ...t2, importTipo:impMode }, t2.contaId, mKey(t2.data), impMode)));
+        const legacyKeys = new Set(trans.filter(t2=>t2.contaId===impContaId&&t2.origem!=="cartao").map(t2=>buildLegacyImportKey({ ...t2, importTipo:impMode }, t2.contaId, impMode)));
+        const strictKeys = buildExistingImportDuplicateKeys(trans, { mode:impMode, contaId:impContaId, cartaoId:impCId });
+        const seen=new Set();
+        const seenStrict=new Set();
+        dups=new Set();
+        rows.forEach(r2=>{
+          const exact=buildImportKey(r2);
+          const legacy=buildLegacyImportKey(r2);
+          const strictCandidates=buildImportDuplicateKeyCandidates(r2, { mode:impMode, destinationId });
+          const hasStrictDuplicate = strictCandidates.some(key => strictKeys.has(key) || seenStrict.has(key));
+          if(exactKeys.has(exact)||legacyKeys.has(legacy)||hasStrictDuplicate||seen.has(exact)) dups.add(r2._id);
+          seen.add(exact);
+          strictCandidates.forEach(key => seenStrict.add(key));
+        });
+      }
       setImpDups(dups);
       setImpTog(Object.fromEntries(rows.map(r2=>[r2._id,!dups.has(r2._id)])));
       setImpRows(rows);
@@ -2730,10 +2956,28 @@ export default function App() {
       }
     }
     if((impMode==="bancario"||impMode==="vale")&&!impContaId){ setImpErr("Selecione a conta de destino."); return; }
-    const ok=impRows.filter(r=>impTog[r._id]);
+    const destinationId = impMode === "cartao" ? impCId : impContaId;
+    const selectedRows = impRows.filter(r=>impTog[r._id]);
+    let duplicateIds = new Set(impDups);
+    if(impMode === "cartao") {
+      duplicateIds = revalidateSelectedCardImportRows(selectedRows, { transactions:trans, cartaoId:impCId, initialDuplicateIds:duplicateIds });
+    } else {
+      const strictKeys = buildExistingImportDuplicateKeys(trans, { mode:impMode, contaId:impContaId, cartaoId:impCId });
+      const seenStrict = new Set();
+      selectedRows.forEach(r=>{
+        const strictCandidates = buildImportDuplicateKeyCandidates(r, { mode:impMode, destinationId });
+        if(strictCandidates.some(key => strictKeys.has(key) || seenStrict.has(key))) duplicateIds.add(r._id);
+        strictCandidates.forEach(key => seenStrict.add(key));
+      });
+    }
+    if(duplicateIds.size !== impDups.size) {
+      setImpDups(duplicateIds);
+      setImpTog(prev=>Object.fromEntries(impRows.map(r=>[r._id, Boolean(prev[r._id]) && !duplicateIds.has(r._id)])));
+    }
+    const ok=selectedRows.filter(r=>!duplicateIds.has(r._id));
     const importBatchId=`batch_${uid()}`;
-    const duplicadas = impRows.filter(r=>impDups.has(r._id));
-    const desmarcadas = impRows.filter(r=>!impTog[r._id]&&!impDups.has(r._id));
+    const duplicadas = impRows.filter(r=>duplicateIds.has(r._id));
+    const desmarcadas = impRows.filter(r=>!impTog[r._id]&&!duplicateIds.has(r._id));
     const reportBase = {
       id:importBatchId,
       arquivo:impFile,
@@ -2748,7 +2992,7 @@ export default function App() {
       desmarcadas:desmarcadas.length,
       valorLiquido:ok.reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0),
       ignoradasDetalhe:impIgnored.slice(0,20),
-      duplicadasDetalhe:duplicadas.slice(0,20).map(r=>({ data:r.data, descricao:r.descricao, valor:r.valor, tipo:r.tipo })),
+      duplicadasDetalhe:duplicadas.slice(0,20).map(r=>({ data:r.data, descricao:r.descricao, valor:r.valor, tipo:r.tipo, motivo:r._cardInstallmentReason || "Duplicidade identificada" })),
     };
     if(impMode==="bancario"||impMode==="vale"){
       const conta=contas.find(c=>c.id===impContaId);
@@ -2762,13 +3006,63 @@ export default function App() {
         id:uid(), tipo:"despesa", origem:"cartao", cartaoId:impCId, contaId:null,
         catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data, dataCompra:r.dataCompra||r.data,
         competencia:r.competencia||impCompetencia, fixo:false, importado:true, importTipo:"cartao", importBatchId,
-        parcela:r.parcela||null, totalParcelas:r.totalParcelas||null, parcelaGrupo:r.parcelaGrupo||null, status:"pago", valorPago:r.valor,
+        parcela:r.parcela||null, totalParcelas:r.totalParcelas||null, parcelaGrupo:r.parcelaGrupo||buildCardInstallmentGroupId(r, { cartaoId:impCId })||null, descricaoBaseParcelamento:r.descricaoBaseParcelamento||null, parcelado:Boolean(r.parcela&&r.totalParcelas), status:"pago", valorPago:r.valor,
       }))]);
     }
     setLastImportReport(reportBase);
     setImpStep("done");
   };
   const resetImport=()=>{ setImpStep("upload"); setImpRows([]); setImpTog({}); setImpErr(""); setImpFile(""); setImpDups(new Set()); setImpIgnored([]); };
+
+  const installmentDivergenceRows = useMemo(() => (
+    impMode === "cartao"
+      ? impRows.filter(row => row?._cardInstallmentCanCorrectSequence && row?._cardInstallmentCorrection)
+      : []
+  ), [impMode, impRows]);
+
+  const installmentCorrectionPreview = useMemo(() => {
+    if (impMode !== "cartao") return {};
+    return Object.fromEntries(installmentDivergenceRows.map(row => [
+      row._id,
+      getCardInstallmentCorrectionPreview(trans, row._cardInstallmentCorrection),
+    ]));
+  }, [impMode, installmentDivergenceRows, trans]);
+
+  const markInstallmentDivergenceAsKept = (row) => {
+    if (!row?._id) return;
+    setImpTog(prev => ({ ...prev, [row._id]: false }));
+    setImpRows(prev => prev.map(item => item._id === row._id ? {
+      ...item,
+      _cardInstallmentUserDecision: "mantido sem alteração",
+    } : item));
+    setImpErr("Divergência mantida sem alteração. A linha continuará fora da importação.");
+  };
+
+  const applyInstallmentDivergenceResolution = (row, mode) => {
+    if (impMode !== "cartao" || !row?._cardInstallmentCanCorrectSequence || !row?._cardInstallmentCorrection) return;
+    const correction = row._cardInstallmentCorrection;
+    const actionLabel = mode === "current_only" ? "alterar somente a parcela desta competência" : "alterar a parcela atual e as subsequentes";
+    const msg = `Confirmar correção do parcelamento?\n\nAção: ${actionLabel}.\nCompetência inicial: ${correction.competencia}.\nArquivo: ${correction.parcela || row.parcela}/${correction.totalParcelas || row.totalParcelas}.\n\nNenhuma nova parcela final será criada automaticamente. Esta ação altera lançamentos já gravados no cartão.`;
+    if (!window.confirm(msg)) return;
+
+    const result = applyCardInstallmentSequenceCorrection(trans, correction, { mode });
+    if (result.error) {
+      setImpErr(result.error);
+      return;
+    }
+
+    setTrans(result.transactions);
+    const refreshedRows = prepareCardImportRows(impRows, { transactions:result.transactions, cartaoId:impCId })
+      .map(item => item._id === row._id ? {
+        ...item,
+        _cardInstallmentUserDecision: mode === "current_only" ? "alterada somente a competência atual" : "alterada competência atual e futuras",
+      } : item);
+    const refreshedDups = buildCardImportDuplicateSet(refreshedRows, { transactions:result.transactions, cartaoId:impCId });
+    setImpRows(refreshedRows);
+    setImpDups(refreshedDups);
+    setImpTog(Object.fromEntries(refreshedRows.map(r=>[r._id,!refreshedDups.has(r._id)])));
+    setImpErr(`Correção aplicada em ${result.changedCount} parcela(s). Revise a prévia novamente antes de confirmar a importação.`);
+  };
 
   const importBatches = useMemo(()=>{
     const map = new Map();
@@ -3665,14 +3959,62 @@ export default function App() {
                     <>
                       <div>
                         <div style={lbl}>Início</div>
-                        <input style={{ ...inp, width:140 }} type="month" value={projectionStartMonth} onChange={e=>setProjectionStartMonth(e.target.value)} />
+                        <MonthShortInput style={inp} value={projectionStartMonth} onChange={setProjectionStartMonth} />
                       </div>
                       <div>
                         <div style={lbl}>Fim</div>
-                        <input style={{ ...inp, width:140 }} type="month" value={projectionEndMonth} onChange={e=>setProjectionEndMonth(e.target.value)} />
+                        <MonthShortInput style={inp} value={projectionEndMonth} onChange={setProjectionEndMonth} />
                       </div>
                     </>
                   )}
+                </div>
+              </div>
+
+              <div style={{ background:C.navy, border:`1px solid ${C.border}`, borderRadius:10, padding:"12px 13px", marginBottom:14 }}>
+                <div style={{ fontWeight:700, fontSize:12, marginBottom:10 }}>Filtros da projeção</div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, alignItems:"end" }}>
+                  <div>
+                    <div style={lbl}>Origem</div>
+                    <select style={inp} value={projectionFilters.origin} onChange={e=>setProjectionFilters(prev=>({ ...prev, origin:e.target.value }))}>
+                      <option value="todos">Todas</option>
+                      <option value="receitas">Receitas</option>
+                      <option value="despesas">Despesas</option>
+                      <option value="faturas">Cartões / Faturas</option>
+                      <option value="simulacoes">Simulações</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={lbl}>Conta</div>
+                    <select style={inp} value={projectionFilters.accountId} onChange={e=>setProjectionFilters(prev=>({ ...prev, accountId:e.target.value }))}>
+                      <option value="">Todas</option>
+                      {contas.map(conta=><option key={conta.id} value={conta.id}>{conta.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={lbl}>Cartão</div>
+                    <select style={inp} value={projectionFilters.cardId} onChange={e=>setProjectionFilters(prev=>({ ...prev, cardId:e.target.value }))}>
+                      <option value="">Todos</option>
+                      {cards.map(card=><option key={card.id} value={card.id}>{card.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={lbl}>Categoria</div>
+                    <select style={inp} value={projectionFilters.rootCatId} onChange={e=>setProjectionFilters(prev=>({ ...prev, rootCatId:e.target.value }))}>
+                      <option value="">Todas</option>
+                      {cats.map(cat=><option key={cat.id} value={cat.id}>{cat.icon} {cat.nome}</option>)}
+                    </select>
+                  </div>
+                  <label style={{ display:"flex", alignItems:"center", gap:7, color:C.soft, fontSize:12, paddingBottom:8 }}>
+                    <input type="checkbox" checked={projectionFilters.includeSimulations} onChange={e=>setProjectionFilters(prev=>({ ...prev, includeSimulations:e.target.checked }))} />
+                    Incluir simulações
+                  </label>
+                  <label style={{ display:"flex", alignItems:"center", gap:7, color:C.soft, fontSize:12, paddingBottom:8 }}>
+                    <input type="checkbox" checked={projectionFilters.includeRecurrences} onChange={e=>setProjectionFilters(prev=>({ ...prev, includeRecurrences:e.target.checked }))} />
+                    Projetar recorrências previstas
+                  </label>
+                </div>
+                <div style={{ fontSize:11, color:C.soft, marginTop:8 }}>
+                  Ao desmarcar recorrências, a projeção remove lançamentos recorrentes ainda previstos e mantém apenas valores já realizados.
                 </div>
               </div>
 
@@ -3681,6 +4023,14 @@ export default function App() {
                 <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Entradas</div><div style={big(C.emerald)}>{fmtBRL(projectionTotals.entradas)}</div></div>
                 <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saídas</div><div style={big(C.coral)}>{fmtBRL(projectionTotals.saidas)}</div></div>
                 <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saldo final projetado</div><div style={big((projectionLast?.saldoProjetado || 0) < 0 ? C.coral : C.gold)}>{fmtBRL(projectionLast?.saldoProjetado || 0)}</div></div>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:16 }}>
+                <div style={{ background:C.navy, borderRadius:9, padding:"12px 13px" }}><div style={lbl}>Menor saldo</div><div style={big(projectionInsights.menorSaldo<0?C.coral:C.gold)}>{fmtBRL(projectionInsights.menorSaldo)}</div><div style={{ fontSize:11, color:C.soft }}>{projectionInsights.menorSaldoMes || "—"}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"12px 13px" }}><div style={lbl}>Maior saída</div><div style={big(C.coral)}>{fmtBRL(projectionInsights.maiorSaida)}</div><div style={{ fontSize:11, color:C.soft }}>{projectionInsights.maiorSaidaMes || "—"}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"12px 13px" }}><div style={lbl}>Maior queda</div><div style={big(projectionInsights.maiorQueda<0?C.coral:C.soft)}>{fmtBRL(projectionInsights.maiorQueda)}</div><div style={{ fontSize:11, color:C.soft }}>{projectionInsights.maiorQuedaMes || "—"}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"12px 13px" }}><div style={lbl}>Meses negativos</div><div style={big(projectionInsights.mesesNegativos>0?C.coral:C.emerald)}>{projectionInsights.mesesNegativos}</div><div style={{ fontSize:11, color:C.soft }}>no período filtrado</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"12px 13px" }}><div style={lbl}>Maior peso faturas</div><div style={big(C.gold)}>{projectionInsights.comprometimentoFaturas.toFixed(1)}%</div><div style={{ fontSize:11, color:C.soft }}>{projectionInsights.comprometimentoFaturasMes || "—"}</div></div>
               </div>
 
               <CashFlowChart
@@ -3693,35 +4043,85 @@ export default function App() {
             <div style={card()}>
               <div style={{ fontWeight:700, fontSize:14, marginBottom:12 }}>Detalhamento por competência</div>
               <div style={{ overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:860 }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:940 }}>
                   <thead>
                     <tr style={{ background:C.border }}>
-                      {["Mês","Saldo inicial","Receitas","Despesas","Faturas","Simulações","Fluxo líquido","Saldo projetado"].map((h,i)=>(
-                        <th key={h} style={{ padding:"8px 10px", textAlign:i===0?"left":"right", color:C.soft, fontSize:10 }}>{h}</th>
+                      {["","Mês","Saldo inicial","Receitas","Despesas","Faturas","Simulações","Fluxo líquido","Saldo projetado"].map((h,i)=>(
+                        <th key={h || "detalhe"} style={{ padding:"8px 10px", textAlign:i<=1?"left":"right", color:C.soft, fontSize:10 }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {projections.map(p=>{
                       const saldoNegativo = p.saldoProjetado < 0;
+                      const expanded = Boolean(expandedProjectionMonths[p.monthKey]);
+                      const detalhes = p.detalhes || { receitas:[], despesas:[], faturas:[], simulacoes:[] };
+                      const detailGroups = [
+                        { key:"faturas", label:"Cartões / Faturas", color:C.gold, sign:"-", rows:detalhes.faturas || [] },
+                        { key:"simulacoes", label:"Simulações", color:"#CE93D8", sign:"-", rows:detalhes.simulacoes || [] },
+                      ];
+                      const totalItens = detailGroups.reduce((sum, group) => sum + group.rows.length, 0);
                       return (
-                        <tr key={p.monthKey} style={{ borderTop:`1px solid ${C.border}`, background:saldoNegativo?C.coral+"10":"transparent" }}>
-                          <td style={{ padding:"8px 10px", fontWeight:700 }}>{p.label}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right" }}>{fmtBRL(p.saldoInicial)}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right", color:C.emerald }}>{fmtBRL(p.receitas)}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right", color:C.coral }}>{fmtBRL(p.despesas)}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right", color:p.faturas>0?C.gold:C.soft }}>{p.faturas>0?fmtBRL(p.faturas):"—"}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right", color:p.simulacoes>0?"#CE93D8":C.soft }}>{p.simulacoes>0?fmtBRL(p.simulacoes):"—"}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right", color:p.fluxoLiquido<0?C.coral:C.emerald, fontWeight:700 }}>{fmtBRL(p.fluxoLiquido)}</td>
-                          <td style={{ padding:"8px 10px", textAlign:"right", color:saldoNegativo?C.coral:C.gold, fontWeight:800 }}>{fmtBRL(p.saldoProjetado)}</td>
-                        </tr>
+                        <Fragment key={p.monthKey}>
+                          <tr style={{ borderTop:`1px solid ${C.border}`, background:saldoNegativo?C.coral+"10":"transparent" }}>
+                            <td style={{ padding:"8px 10px", width:42 }}>
+                              <button
+                                type="button"
+                                title={expanded ? "Ocultar detalhes" : "Exibir detalhes"}
+                                onClick={()=>setExpandedProjectionMonths(prev=>({ ...prev, [p.monthKey]:!prev[p.monthKey] }))}
+                                style={{ background:expanded?C.gold+"22":C.navy, border:`1px solid ${expanded?C.gold:C.border}`, borderRadius:7, color:expanded?C.gold:C.soft, cursor:"pointer", width:28, height:24, fontWeight:800 }}
+                              >{expanded?"−":"+"}</button>
+                            </td>
+                            <td style={{ padding:"8px 10px", fontWeight:700 }}>{p.label}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right" }}>{fmtBRL(p.saldoInicial)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:C.emerald }}>{fmtBRL(p.receitas)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:C.coral }}>{fmtBRL(p.despesas)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:p.faturas>0?C.gold:C.soft }}>{p.faturas>0?fmtBRL(p.faturas):"—"}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:p.simulacoes>0?"#CE93D8":C.soft }}>{p.simulacoes>0?fmtBRL(p.simulacoes):"—"}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:p.fluxoLiquido<0?C.coral:C.emerald, fontWeight:700 }}>{fmtBRL(p.fluxoLiquido)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:saldoNegativo?C.coral:C.gold, fontWeight:800 }}>{fmtBRL(p.saldoProjetado)}</td>
+                          </tr>
+                          {expanded&&(
+                            <tr key={`${p.monthKey}_details`} style={{ background:C.navy }}>
+                              <td colSpan={9} style={{ padding:"12px 14px", borderTop:`1px solid ${C.border}` }}>
+                                {totalItens===0 ? (
+                                  <div style={{ color:C.soft, fontSize:12 }}>Nenhuma fatura ou simulação encontrada para esta competência.</div>
+                                ) : (
+                                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
+                                    {detailGroups.map(group=>(
+                                      <div key={group.key} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, padding:"11px 12px" }}>
+                                        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                                          <div style={{ fontWeight:800, color:group.color, fontSize:12 }}>{group.label}</div>
+                                          <div style={{ fontSize:10, color:C.soft }}>{group.rows.length} item{group.rows.length===1?"":"s"}</div>
+                                        </div>
+                                        {group.rows.length===0 ? (
+                                          <div style={{ color:C.soft, fontSize:11 }}>Sem itens.</div>
+                                        ) : group.rows.slice(0,8).map(item=>(
+                                          <div key={item.id} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8, borderTop:`1px solid ${C.border}`, padding:"7px 0" }}>
+                                            <div style={{ minWidth:0 }}>
+                                              <div style={{ fontWeight:700, fontSize:12, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.descricao}</div>
+                                              <div style={{ fontSize:10, color:C.soft }}>{[item.data&&fmtDate(item.data), item.status, item.origem, item.parcela?`${item.parcela}/${item.totalParcelas}`:""].filter(Boolean).join(" · ")}</div>
+                                              {item.catId&&<div style={{ fontSize:10, color:C.soft }}>{getCatLabel(item.catId)}</div>}
+                                            </div>
+                                            <div style={{ color:group.color, fontWeight:800, fontSize:12, textAlign:"right" }}>{group.sign} {fmtBRL(item.valor)}</div>
+                                          </div>
+                                        ))}
+                                        {group.rows.length>8&&<div style={{ color:C.soft, fontSize:10, marginTop:6 }}>+ {group.rows.length-8} item{group.rows.length-8===1?"":"s"} não exibido{group.rows.length-8===1?"":"s"}.</div>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
               <div style={{ fontSize:11, color:C.soft, marginTop:10 }}>
-                Faturas: pagamentos previstos já lançados e faturas ainda não fechadas projetadas para o mês de vencimento. Simulações: impacto projetado no mês subsequente à competência da fatura.
+                O detalhamento exibe apenas cartões/faturas e simulações para reduzir poluição visual. Receitas, despesas e recorrências permanecem consolidadas nos totais mensais e podem ser analisadas pelos filtros.
               </div>
             </div>
 
@@ -3821,7 +4221,7 @@ export default function App() {
             </div>}
             {impStep==="review"&&(
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-                <div style={card()}><div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4, gap:12, flexWrap:"wrap" }}><div><div style={{ fontWeight:700, fontSize:14 }}>2 · Revise os lançamentos</div><div style={{ fontSize:12, color:C.soft }}><strong style={{ color:C.text }}>{impFile}</strong> · {impMode==="cartao"?<>competência <strong style={{ color:C.text }}>{impCompetencia}</strong></>:<>conta <strong style={{ color:C.text }}>{contas.find(c=>c.id===impContaId)?.nome||"—"}</strong></>} · {impRows.length} lançamentos · <span style={{ color:C.gold }}>{Object.values(impTog).filter(Boolean).length} selecionados</span>{(impDups.size>0||impIgnored.length>0)&&<span style={{ color:C.coral }}> · {impDups.size + impIgnored.length} duplicatas/ignorados</span>}</div></div><button onClick={resetImport} style={ghost()}>← Voltar</button></div><div style={{ display:"flex", gap:7, marginTop:10, flexWrap:"wrap" }}><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,true])))} style={ghost()}>Sel. tudo</button><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,false])))} style={ghost()}>Desmarcar</button></div>{(impDups.size>0||impIgnored.length>0)&&<div style={{ marginTop:10, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Duplicatas</div><div style={{ fontWeight:800, color:C.gold }}>{impDups.size}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Ignorados por regra</div><div style={{ fontWeight:800, color:C.coral }}>{impIgnored.length}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Selecionados</div><div style={{ fontWeight:800, color:C.emerald }}>{Object.values(impTog).filter(Boolean).length}</div></div></div>}{impIgnored.length>0&&<div style={{ marginTop:10, fontSize:11, color:C.soft }}>Ignorados automaticamente: {impIgnored.slice(0,3).map(i=>i.motivo).join(", ")}{impIgnored.length>3?` e mais ${impIgnored.length-3}`:""}.</div>}</div>
+                <div style={card()}><div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4, gap:12, flexWrap:"wrap" }}><div><div style={{ fontWeight:700, fontSize:14 }}>2 · Revise os lançamentos</div><div style={{ fontSize:12, color:C.soft }}><strong style={{ color:C.text }}>{impFile}</strong> · {impMode==="cartao"?<>competência <strong style={{ color:C.text }}>{impCompetencia}</strong></>:<>conta <strong style={{ color:C.text }}>{contas.find(c=>c.id===impContaId)?.nome||"—"}</strong></>} · {impRows.length} lançamentos · <span style={{ color:C.gold }}>{Object.values(impTog).filter(Boolean).length} selecionados</span>{(impDups.size>0||impIgnored.length>0)&&<span style={{ color:C.coral }}> · {impDups.size + impIgnored.length} duplicatas/ignorados</span>}</div></div><button onClick={resetImport} style={ghost()}>← Voltar</button></div><div style={{ display:"flex", gap:7, marginTop:10, flexWrap:"wrap" }}><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,!impDups.has(r._id)])))} style={ghost()}>Sel. tudo</button><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,false])))} style={ghost()}>Desmarcar</button></div>{(impDups.size>0||impIgnored.length>0)&&<div style={{ marginTop:10, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Duplicatas</div><div style={{ fontWeight:800, color:C.gold }}>{impDups.size}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Ignorados por regra</div><div style={{ fontWeight:800, color:C.coral }}>{impIgnored.length}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Selecionados</div><div style={{ fontWeight:800, color:C.emerald }}>{Object.values(impTog).filter(Boolean).length}</div></div></div>}{impIgnored.length>0&&<div style={{ marginTop:10, fontSize:11, color:C.soft }}>Ignorados automaticamente: {impIgnored.slice(0,3).map(i=>i.motivo).join(", ")}{impIgnored.length>3?` e mais ${impIgnored.length-3}`:""}.</div>}</div>
                 <div style={card({ padding:0, overflow:"hidden" })}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                     <thead><tr style={{ background:C.border }}>{["","Data",impMode==="cartao"?"Competência":"Tipo","Descrição","Categoria","Parcela","Valor",""] .map((h,i)=><th key={i} style={{ padding:"8px 11px", textAlign:i===6?"right":"left", color:C.soft, fontSize:10 }}>{h}</th>)}</tr></thead>
@@ -3831,7 +4231,7 @@ export default function App() {
                           <td style={{ padding:"8px 11px", width:30 }}><input type="checkbox" checked={ck} onChange={e=>setImpTog(p=>({...p,[r._id]:e.target.checked}))}/></td>
                           <td style={{ padding:"8px 11px", color:C.soft, whiteSpace:"nowrap" }}>{fmtDate(r.data)}</td>
                           <td style={{ padding:"8px 11px", color:r.tipo==="receita"?C.emerald:C.soft, whiteSpace:"nowrap", fontWeight:impMode!=="cartao"?700:400 }}>{impMode==="cartao"?r.competencia:(r.tipo==="receita"?"Receita":"Despesa")}</td>
-                          <td style={{ padding:"8px 11px" }}><div>{r.descricao}</div>{r.importadoFuturo&&<div style={{ fontSize:10, color:C.soft }}>gerado automaticamente para parcela futura</div>}{isDup&&<div style={{ fontSize:10, color:C.gold }}>⚠ duplicata desprezada por padrão</div>}</td>
+                          <td style={{ padding:"8px 11px" }}><div>{r.descricao}</div>{r.importadoFuturo&&<div style={{ fontSize:10, color:C.soft }}>gerado automaticamente para parcela futura</div>}{r._cardInstallmentStatus==="novo_parcelamento"&&<div style={{ fontSize:10, color:C.emerald }}>parcelamento novo controlado internamente</div>}{isDup&&<div style={{ fontSize:10, color:C.gold }}>⚠ {r._cardInstallmentReason || "duplicata desprezada por padrão"}</div>}{r._cardInstallmentCanCorrectSequence&&<div style={{ fontSize:10, color:C.gold, marginTop:5 }}>⚠ Divergência listada para análise manual no painel abaixo.</div>}</td>
                           <td style={{ padding:"8px 11px" }}><CategorySelect cats={cats} value={r.catId} onChange={v=>setImpRows(p=>p.map(x=>x._id===r._id?{...x,catId:v}:x))} style={{ fontSize:11, padding:"3px 7px", width:"auto" }}/></td>
                           <td style={{ padding:"8px 11px", color:C.soft, whiteSpace:"nowrap" }}>{r.parcela?`${r.parcela}/${r.totalParcelas}`:"—"}</td>
                           <td style={{ padding:"8px 11px", textAlign:"right", fontWeight:700, color:r.tipo==="receita"?C.emerald:C.coral }}>{r.tipo==="receita"?"+":"-"}{fmtBRL(r.valor)}</td>
@@ -3841,6 +4241,22 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+                {impMode === "cartao" && installmentDivergenceRows.length > 0 && (
+                  <CardInstallmentDivergencePanel
+                    divergences={installmentDivergenceRows}
+                    correctionsPreview={installmentCorrectionPreview}
+                    onKeep={markInstallmentDivergenceAsKept}
+                    onCorrectCurrentOnly={row=>applyInstallmentDivergenceResolution(row, "current_only")}
+                    onCorrectCurrentAndFuture={row=>applyInstallmentDivergenceResolution(row, "current_and_future")}
+                    fmtBRL={fmtBRL}
+                    formatMonthBR={formatMonthBR}
+                    C={C}
+                    cardStyle={card}
+                    ghost={ghost}
+                    btn={btn}
+                    lbl={lbl}
+                  />
+                )}
                 <div style={card()}>
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
                     <div><div style={lbl}>Total selecionado</div><div style={{ fontSize:18, fontWeight:800, color:impRows.filter(r=>impTog[r._id]).reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0)>=0?C.emerald:C.coral }}>{fmtBRL(impRows.filter(r=>impTog[r._id]).reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0))}</div><div style={{ fontSize:11, color:C.soft }}>{Object.values(impTog).filter(Boolean).length} lançamentos → {impMode==="cartao"?(cards.find(c=>c.id===impCId)?.nome||"—"):(contas.find(c=>c.id===impContaId)?.nome||"—")}</div></div>
@@ -3850,7 +4266,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {impStep==="done"&&<div style={{ display:"flex", flexDirection:"column", gap:12 }}><div style={{ ...card(), textAlign:"center", padding:"34px 24px" }}><div style={{ fontSize:36, marginBottom:9 }}>✅</div><div style={{ fontWeight:800, fontSize:16, marginBottom:5 }}>Importação concluída!</div><div style={{ fontSize:13, color:C.soft, marginBottom:20 }}>Lançamentos adicionados {impMode==="cartao"?<>ao {cards.find(c=>c.id===impCId)?.nome} na competência {impCompetencia}</>:<>à conta {contas.find(c=>c.id===impContaId)?.nome}</>}.</div><div style={{ display:"flex", gap:9, justifyContent:"center", flexWrap:"wrap" }}><button onClick={resetImport} style={btn(C.emerald)}>Importar outro</button><button onClick={()=>{ setTab("lancamentos"); resetImport(); }} style={btn(C.border)}>Ver lançamentos</button>{lastImportReport?.id&&<button onClick={()=>undoImportBatch(lastImportReport.id)} style={btn(C.coral)}>Desfazer este lote</button>}</div></div>{lastImportReport&&<div style={card()}><div style={{ fontWeight:800, fontSize:14, marginBottom:10 }}>Relatório da importação</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Importados</div><div style={{ fontWeight:800, color:C.emerald }}>{lastImportReport.importadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Duplicados</div><div style={{ fontWeight:800, color:C.gold }}>{lastImportReport.duplicadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Ignorados</div><div style={{ fontWeight:800, color:C.coral }}>{lastImportReport.ignoradas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Valor líquido</div><div style={{ fontWeight:800, color:lastImportReport.valorLiquido>=0?C.emerald:C.coral }}>{fmtBRL(lastImportReport.valorLiquido)}</div></div></div>{lastImportReport.ignoradasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Ignorados por regra</div>{lastImportReport.ignoradasDetalhe.map(i=><div key={i.id} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>Linha {i.linha}: {i.motivo} — {i.descricao.slice(0,120)}</div>)}</div>}{lastImportReport.duplicadasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Duplicatas identificadas</div>{lastImportReport.duplicadasDetalhe.map((d,i)=><div key={i} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>{fmtDate(d.data)} · {d.descricao} · {fmtBRL(d.valor)}</div>)}</div>}</div>}</div>}
+            {impStep==="done"&&<div style={{ display:"flex", flexDirection:"column", gap:12 }}><div style={{ ...card(), textAlign:"center", padding:"34px 24px" }}><div style={{ fontSize:36, marginBottom:9 }}>✅</div><div style={{ fontWeight:800, fontSize:16, marginBottom:5 }}>Importação concluída!</div><div style={{ fontSize:13, color:C.soft, marginBottom:20 }}>Lançamentos adicionados {impMode==="cartao"?<>ao {cards.find(c=>c.id===impCId)?.nome} na competência {impCompetencia}</>:<>à conta {contas.find(c=>c.id===impContaId)?.nome}</>}.</div><div style={{ display:"flex", gap:9, justifyContent:"center", flexWrap:"wrap" }}><button onClick={resetImport} style={btn(C.emerald)}>Importar outro</button><button onClick={()=>{ setTab("lancamentos"); resetImport(); }} style={btn(C.border)}>Ver lançamentos</button>{lastImportReport?.id&&<button onClick={()=>undoImportBatch(lastImportReport.id)} style={btn(C.coral)}>Desfazer este lote</button>}</div></div>{lastImportReport&&<div style={card()}><div style={{ fontWeight:800, fontSize:14, marginBottom:10 }}>Relatório da importação</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Importados</div><div style={{ fontWeight:800, color:C.emerald }}>{lastImportReport.importadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Duplicados</div><div style={{ fontWeight:800, color:C.gold }}>{lastImportReport.duplicadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Ignorados</div><div style={{ fontWeight:800, color:C.coral }}>{lastImportReport.ignoradas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Valor líquido</div><div style={{ fontWeight:800, color:lastImportReport.valorLiquido>=0?C.emerald:C.coral }}>{fmtBRL(lastImportReport.valorLiquido)}</div></div></div>{lastImportReport.ignoradasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Ignorados por regra</div>{lastImportReport.ignoradasDetalhe.map(i=><div key={i.id} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>Linha {i.linha}: {i.motivo} — {i.descricao.slice(0,120)}</div>)}</div>}{lastImportReport.duplicadasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Duplicatas identificadas</div>{lastImportReport.duplicadasDetalhe.map((d,i)=><div key={i} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>{fmtDate(d.data)} · {d.descricao} · {fmtBRL(d.valor)}{d.motivo?` · ${d.motivo}`:""}</div>)}</div>}</div>}</div>}
           </div>
         )}
 

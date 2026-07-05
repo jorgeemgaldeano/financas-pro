@@ -197,3 +197,182 @@ Dado que o usuário seleciona um arquivo inválido ou incompatível
 Quando tenta restaurar o backup  
 Então o sistema deve bloquear a restauração  
 E os dados atuais não devem ser apagados ou substituídos.
+
+---
+
+## Critérios de aceite — v0.3.26.2 — Importação de cartão
+
+### CT-CARTAO-IMPORT-001 — Compra à vista nova
+
+Dado que importo uma compra não parcelada de cartão
+E ela não existe no sistema
+Quando confirmo a importação
+Então o sistema deve criar o lançamento normalmente.
+
+### CT-CARTAO-IMPORT-002 — Compra à vista duplicada
+
+Dado que importo uma compra não parcelada já existente
+Quando o sistema monta a prévia
+Então a linha deve ser marcada como duplicada
+E não deve ser importada novamente.
+
+### CT-CARTAO-IMPORT-003 — Parcelamento novo em cartão vazio
+
+Dado que não há lançamentos no cartão
+E importo uma compra parcelada
+Quando confirmo a importação
+Então o sistema deve criar a parcela da competência atual
+E deve criar as parcelas futuras conforme o total de parcelas.
+
+### CT-CARTAO-IMPORT-004 — Parcelamento existente com parcela correta
+
+Dado que existe um parcelamento no sistema
+E importo uma fatura futura contendo uma parcela já criada
+Quando o sistema monta a prévia
+Então a linha deve ser marcada como já existente
+E não deve ser importada novamente.
+
+### CT-CARTAO-IMPORT-005 — Parcelamento existente com parcela ausente
+
+Dado que existe o master lógico do parcelamento
+Mas a parcela informada no arquivo não está no sistema
+Quando o sistema monta a prévia
+Então o sistema deve apontar divergência
+E não deve importar automaticamente.
+
+### CT-CARTAO-IMPORT-006 — Total de parcelas divergente
+
+Dado que existe um parcelamento de 10 parcelas
+Quando importo a mesma compra como 12 parcelas
+Então o sistema deve apontar divergência de total de parcelas
+E não deve importar automaticamente.
+
+### CT-CARTAO-IMPORT-007 — Mesma loja, mesma data, valor diferente
+
+Dado que existem duas compras parceladas no mesmo estabelecimento e na mesma data
+E o valor da parcela possui diferença maior que R$ 0,10
+Quando importo o arquivo
+Então o sistema deve tratar como parcelamentos diferentes.
+
+### CT-CARTAO-IMPORT-008 — Diferença de centavos tolerada
+
+Dado que uma parcela existente tem valor R$ 100,00
+Quando importo a mesma parcela com valor entre R$ 99,90 e R$ 100,10
+Então o sistema deve considerar como mesmo parcelamento.
+
+---
+
+## Critérios de aceite v0.3.26.3
+
+### CT-v0.3.26.3-001 — Parcelas futuras selecionadas na primeira carga
+
+Dado que existe um cartão sem lançamentos
+E uma fatura contém uma compra parcelada nova 1/N
+Quando o usuário carrega o arquivo de importação
+Então o sistema deve exibir a parcela atual e as parcelas futuras
+E todas devem estar selecionadas para importação, salvo regra explícita de bloqueio.
+
+### CT-v0.3.26.3-002 — Parcelas futuras não são duplicadas entre si
+
+Dado que uma compra parcelada nova gera parcelas futuras na prévia
+Quando o sistema valida duplicidade
+Então não deve considerar as parcelas 2/N em diante como duplicadas apenas por terem mesma data de compra, descrição base e valor.
+
+### CT-v0.3.26.3-003 — Reimportação futura continua bloqueada
+
+Dado que o parcelamento já foi salvo
+Quando uma fatura futura trouxer uma parcela já existente
+Então o sistema deve marcar a linha como duplicada/parcela existente
+E não deve importar novamente.
+
+## CA0XX — Importar fatura subsequente com parcelas já existentes
+
+### Cenário 1 — Parcela futura já criada
+
+Dado que uma compra parcelada foi importada na competência inicial  
+E o sistema criou as parcelas futuras  
+Quando o usuário importa a fatura subsequente contendo uma dessas parcelas  
+Então o sistema deve reconhecer a parcela já existente  
+E deve marcar a linha como duplicada/existente  
+E não deve importar novamente a parcela.
+
+### Cenário 2 — Arquivo subsequente com data ou descrição diferente
+
+Dado que uma parcela futura já existe no sistema  
+E o arquivo da fatura subsequente apresenta data ou descrição parcialmente diferente  
+Quando a parcela possuir mesma competência, mesmo número de parcela, mesmo total de parcelas, valor dentro de R$ 0,10 e descrição compatível  
+Então o sistema deve considerar a parcela como já existente.
+
+### Cenário 3 — Novo lançamento na fatura subsequente
+
+Dado que a fatura subsequente contém lançamentos realmente novos  
+Quando o sistema monta a prévia de importação  
+Então os lançamentos novos devem permanecer selecionados para importação.
+
+
+## CA030 — Tolerância de valor na importação de parcela de cartão
+
+Dado que existe uma parcela de cartão no valor de R$ 116,24  
+Quando o arquivo importado trouxer valor entre R$ 116,19 e R$ 116,29  
+Então o sistema deve considerar o valor equivalente.
+
+Dado que existe uma parcela de cartão no valor de R$ 116,24  
+Quando o arquivo importado trouxer valor menor que R$ 116,19 ou maior que R$ 116,29  
+Então o sistema não deve considerar automaticamente como a mesma parcela.
+
+## CA031 — Divergência de parcela em fatura subsequente
+
+Dado que existe no sistema a parcela 03/10 para uma competência  
+Quando o arquivo importado informa a parcela 02/10 para o mesmo parcelamento e competência  
+Então o sistema deve listar a divergência para análise manual  
+E não deve importar automaticamente a linha divergente.
+
+## CA032 — Correção manual da parcela atual e subsequentes
+
+Dado que existe uma divergência de parcela corrigível  
+Quando o usuário aciona a opção de corrigir parcela atual e subsequentes  
+Então o sistema deve atualizar a parcela da competência atual  
+E deve renumerar as parcelas futuras do mesmo `parcelaGrupo`  
+E deve preservar o vínculo do parcelamento  
+E deve solicitar confirmação antes de alterar lançamentos já gravados.
+
+---
+
+## CA — Divergência de parcela na importação de cartão
+
+### Cenário 1 — Divergência listada sem alteração automática
+
+Dado que existe no sistema a parcela 03/10 em determinada competência  
+E o arquivo importado informa a parcela 02/10 para o mesmo parcelamento e competência  
+Quando a prévia da importação é montada  
+Então o sistema deve listar a divergência no painel de divergências  
+E não deve alterar nenhum lançamento automaticamente  
+E não deve importar a linha divergente automaticamente.
+
+### Cenário 2 — Manter como está
+
+Dado que existe uma divergência listada  
+Quando o usuário escolhe manter como está  
+Então nenhum lançamento deve ser alterado  
+E a linha divergente deve continuar fora da importação.
+
+### Cenário 3 — Alterar somente parcela atual
+
+Dado que existe uma divergência em determinada competência  
+Quando o usuário escolhe alterar somente a parcela atual  
+Então apenas o lançamento daquela competência deve ser atualizado  
+E as parcelas futuras do mesmo grupo devem permanecer sem alteração.
+
+### Cenário 4 — Alterar atual e futuras
+
+Dado que existe uma divergência em determinada competência  
+Quando o usuário escolhe alterar a parcela atual e as futuras  
+Então o lançamento da competência atual deve ser atualizado  
+E as parcelas posteriores do mesmo grupo devem ser renumeradas  
+E nenhuma nova parcela final deve ser criada automaticamente.
+
+### Cenário 5 — Preservar cenários aprovados
+
+Dado que os testes de primeira carga, reimportação, fatura subsequente sem divergência e tolerância de valor foram aprovados  
+Quando a v0.3.26.6 for validada  
+Então esses comportamentos devem permanecer funcionando.

@@ -635,3 +635,293 @@ Validar filtros de lançamentos e autocategorização após extração.
 
 - Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
 - Pendente validação manual da aba Projeções em modo Ano e Período.
+
+## [0.3.21] - 2026-07-04
+
+### Adicionado
+
+- Criado detalhamento expansível na aba Projeções por competência.
+- Adicionados grupos de detalhes para receitas, despesas, faturas e simulações.
+- `projectionService.js` passou a retornar `detalhes` por mês projetado.
+
+### Alterado
+
+- `src/App.jsx` passou a controlar expansão dos meses projetados.
+- Versão visual atualizada para `v0.3.21`.
+
+### Corrigido
+
+- Não aplicável. Evolução funcional incremental da análise de Projeções.
+
+### Migração
+
+- Não houve alteração de LocalStorage.
+- Não houve alteração de chaves ou estrutura persistida.
+
+### Testes
+
+- Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
+- Pendente validação manual da expansão dos meses e conferência dos detalhes por origem.
+
+
+## [0.3.21.1] - 2026-07-04
+
+### Alterado
+
+- Ajustados os campos de período da aba Projeções para formato curto `MM/AA`.
+- Detalhamento expansível da projeção limitado a Cartões/Faturas e Simulações.
+- Receitas e despesas permanecem nos totais mensais, sem detalhamento item a item.
+
+### Migração
+
+- Não houve alteração de LocalStorage.
+
+### Testes
+
+- Validação sintática via TypeScript `transpileModule` executada sem diagnósticos.
+- Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
+
+## [0.3.22] - 2026-07-04
+
+### Adicionado
+
+- Filtros avançados na aba **Projeções** por origem, conta, cartão e categoria principal.
+- Opções para incluir/excluir simulações e projetar/não projetar recorrências.
+- Indicadores analíticos do fluxo de caixa: menor saldo, maior saída, maior queda, meses negativos e maior peso de faturas.
+- Projeção conservadora de recorrências baseada em lançamentos existentes com `fixo: true`, sem gravação de novos lançamentos.
+
+### Alterado
+
+- `src/services/projectionService.js` passou a calcular projeções considerando filtros e recorrências analíticas.
+- `src/App.jsx` passou a exibir filtros e indicadores na aba Projeções.
+- Versão visual atualizada para `v0.3.22`.
+
+### Corrigido
+
+- Não aplicável. Evolução funcional controlada da aba Projeções.
+
+### Removido
+
+- Não aplicável.
+
+### Migração
+
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração de estrutura persistida.
+- Não houve migração.
+
+### Testes
+
+- Validação sintática via TypeScript `transpileModule` executada sem diagnósticos em `src/App.jsx`, `src/services/projectionService.js` e `src/components/charts/CashFlowChart.jsx`.
+- Pendente validação local com `npm run dev`, `npm run build` e `npm run preview`.
+
+## [0.3.23] - 2026-07-04
+
+### Corrigido
+
+- Corrigido o comportamento do filtro **Projetar recorrências previstas** na aba **Projeções**.
+- O filtro agora remove da projeção os lançamentos recorrentes ainda previstos, inclusive aqueles já materializados no array de transações.
+
+### Alterado
+
+- Texto do filtro ajustado para **Projetar recorrências previstas**.
+- Incluída explicação visual sobre o comportamento do filtro.
+- Atualizada a versão visual para `v0.3.23`.
+
+### Migração
+
+- Não houve alteração de LocalStorage.
+- Não houve migração.
+
+### Testes
+
+- Validação sintática via TypeScript `transpileModule` executada sem diagnósticos em `src/App.jsx`, `src/services/projectionService.js` e `src/components/charts/CashFlowChart.jsx`.
+- Pendente validação manual no ambiente local.
+
+
+## [0.3.24] - 2026-07-04
+
+### Corrigido
+
+- Corrigida validação de duplicidade na importação bancária por data, descrição e valor.
+- Corrigida validação de duplicidade na importação de cartão/fatura por data, descrição e valor.
+- Validação de duplicidade reexecutada no momento de confirmar a importação.
+
+### Migração
+
+- Não houve alteração de LocalStorage.
+
+### Testes
+
+- Validação sintática executada sem diagnósticos.
+- Pendente validação manual com reimportação bancária e de cartão.
+# Changelog — Finanças PRO v0.3.24.1
+
+Data: 2026-07-04
+
+## Objetivo
+
+Corrigir a validação de duplicidade que ainda falhava na importação de cartão de crédito e aplicar a mesma regra de duplicidade ao extrato Pluxee.
+
+## Corrigido
+
+- Ajustada a validação de duplicidade da importação de cartão de crédito para considerar múltiplos candidatos de data (`dataCompra` e `data`).
+- Mantida a validação por destino, data, descrição normalizada, valor e tipo.
+- Aplicada a regra de duplicidade ao modo `vale`/Pluxee usando conta destino, data, descrição, valor e tipo.
+- Ajustado botão **Sel. tudo** para não remarcar duplicatas identificadas na prévia.
+- A confirmação da importação continua revalidando duplicidade antes de salvar.
+
+## Alterado
+
+- `src/App.jsx` atualizado para `v0.3.24.1`.
+- Funções auxiliares de chave de duplicidade passaram a gerar candidatos de comparação para reduzir falso negativo em cartão parcelado/importações com `dataCompra`.
+
+## Regras preservadas
+
+- Não houve alteração de regra de fatura.
+- Não houve alteração de baixa, pagamento ou projeção.
+- Não houve alteração de cálculo financeiro fora da importação.
+
+## Impacto em LocalStorage
+
+- Sem nova chave.
+- Sem alteração de estrutura.
+- Sem migração.
+- Sem alteração em backup/restauração.
+- A versão apenas impede novas duplicidades.
+
+## Testes recomendados
+
+1. Importar extrato bancário já validado anteriormente.
+2. Reimportar o mesmo extrato bancário e confirmar duplicatas.
+3. Importar fatura de cartão uma vez.
+4. Reimportar a mesma fatura e confirmar duplicatas.
+5. Importar fatura seguinte contendo parcelas já geradas anteriormente e confirmar que não duplica.
+6. Importar extrato Pluxee uma vez.
+7. Reimportar o mesmo Pluxee e confirmar duplicatas.
+8. Confirmar que o botão **Sel. tudo** não seleciona duplicatas.
+9. Rodar `npm run build`.
+10. Rodar `npm run preview`.
+
+---
+
+## v0.3.25 — Controle interno de parcelamentos de cartão
+
+- Criado controle lógico de parcelamento 1:N na importação de cartão.
+- Parcelas futuras já previstas deixam de ser importadas novamente.
+- Divergências de parcelamento passam a ser apontadas no relatório da importação.
+- Campos opcionais `parcelaGrupo` e `descricaoBaseParcelamento` são aplicados a novos lançamentos parcelados.
+- Sem alteração de chaves do LocalStorage e sem migração obrigatória.
+
+---
+
+## v0.3.26.2 — 2026-07-04
+
+### Corrigido
+
+- Revisada a importação de cartão para tratar compra parcelada como master lógico.
+- Corrigida a identificação de parcelamentos por cartão, descrição base, data da compra e valor da parcela com tolerância de R$ 0,10.
+- Impedida a expansão de linhas que já pertencem a parcelamento existente.
+- Restaurada a criação de parcelas futuras quando o parcelamento ainda não existe no cartão.
+- Adicionada distinção entre compras semelhantes no mesmo estabelecimento e data com valores diferentes.
+
+### Mantido
+
+- Fluxo de compra à vista.
+- Fluxo bancário.
+- Fluxo de vale.
+- Estrutura do LocalStorage.
+
+### Dependências
+
+- Nenhuma dependência externa adicionada.
+
+---
+
+## v0.3.26.3 — Correção de falso duplicado entre parcelas futuras
+
+- Corrigida a marcação indevida de parcelas futuras como duplicadas na prévia de importação de cartão.
+- Compras parceladas agora usam chave de duplicidade específica por master lógico + parcela/total.
+- Compras à vista preservam a regra anterior por cartão + data + descrição + valor.
+- Sem alteração em LocalStorage.
+
+## [0.3.26.4] - 2026-07-04
+
+### Corrigido
+
+- Corrigido o reconhecimento de parcelas já existentes ao importar fatura subsequente de cartão de crédito.
+- Parcelas futuras criadas na primeira carga agora podem ser reconhecidas por competência, parcela/total, valor aproximado e descrição compatível, mesmo quando o arquivo altera data ou parte da descrição.
+
+### Alterado
+
+- `cardInstallmentService.js` passou a manter índice interno de parcelas existentes e aplicar validação complementar para faturas subsequentes.
+- Versão visual atualizada para `v0.3.26.4`.
+
+### Migração
+
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração estrutural dos dados persistidos.
+- Campos existentes continuam compatíveis.
+
+### Testes
+
+- Validar primeira carga de compra parcelada.
+- Validar reimportação do mesmo arquivo.
+- Validar importação da fatura subsequente com parcelas já criadas.
+- Validar que novos lançamentos continuam importáveis.
+
+
+## [0.3.26.5] - 2026-07-04
+
+### Adicionado
+
+- Ação manual na prévia de importação de cartão para corrigir parcela atual e subsequentes quando houver divergência corrigível.
+- Identificação de divergência de parcela quando o sistema possui uma parcela prevista diferente da informada no arquivo.
+
+### Alterado
+
+- Tolerância de comparação de valor de parcela reduzida de R$ 0,10 para R$ 0,05.
+- Linhas divergentes permanecem bloqueadas para importação automática até análise manual.
+
+### Corrigido
+
+- Tratamento de casos em que a administradora do cartão pula ou repete parcelas, causando divergência entre parcela prevista e parcela importada.
+
+### Migração
+
+- Não houve alteração de chave do LocalStorage.
+- Não houve migração obrigatória.
+
+### Testes
+
+- Pendente validação local com `npm run build` e teste manual do fluxo de divergência/correção.
+
+---
+
+## [0.3.26.6] - 2026-07-04
+
+### Adicionado
+
+- Criado `src/components/finance/CardInstallmentDivergencePanel.jsx` para exibir divergências de parcelamento na importação de cartão.
+- Adicionadas ações manuais para divergências: manter como está, alterar somente parcela atual, alterar atual e futuras.
+
+### Alterado
+
+- A correção de divergência deixa de ser executada diretamente pela linha da tabela de importação.
+- `src/App.jsx` passa a exibir painel próprio ao final da página de revisão quando há divergências.
+- `cardInstallmentService.js` passa a suportar correção somente da competência atual ou da competência atual e futuras.
+
+### Corrigido
+
+- Corrigido comportamento em que a tentativa de correção de divergência podia gerar sequência incorreta ou aparente criação de nova última parcela.
+
+### Migração
+
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração estrutural de dados.
+- Campos opcionais de rastreabilidade podem ser adicionados apenas quando o usuário confirma correção manual.
+
+### Testes
+
+- Pendente validação local com `npm run build` e `npm run dev`.
+- Pendente reteste dos cenários de divergência de parcela.

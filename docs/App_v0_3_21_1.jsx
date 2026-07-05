@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { Fragment, useState, useMemo, useCallback, useEffect } from "react";
 import { RequiredFieldModal, requiredFieldInfo, highlightIfRequired } from "./components/ui/RequiredFieldModal.jsx";
 import { DateInput } from "./components/ui/DateInput.jsx";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
@@ -9,12 +9,14 @@ import { useLS, lsSave } from "./hooks/useLocalStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
+import { buildRealCashFlowProjection } from "./services/projectionService.js";
+import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.18";
+const APP_VERSION = "0.3.21.1";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -280,6 +282,75 @@ function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
       placeholder={placeholder}
       value={value || ""}
       onChange={e=>onChange(maskMoneyInput(e.target.value))}
+    />
+  );
+}
+
+function formatMonthShort(monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return "";
+  const [year, month] = monthKey.split("-");
+  return `${month}/${year.slice(2)}`;
+}
+
+function parseMonthShort(text) {
+  const digits = String(text || "").replace(/\D/g, "").slice(0, 4);
+  if (digits.length !== 4) return null;
+
+  const month = parseInt(digits.slice(0, 2), 10);
+  const yearSuffix = parseInt(digits.slice(2, 4), 10);
+
+  if (!Number.isFinite(month) || month < 1 || month > 12 || !Number.isFinite(yearSuffix)) {
+    return null;
+  }
+
+  const year = 2000 + yearSuffix;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+function maskMonthShort(text) {
+  const digits = String(text || "").replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+}
+
+function MonthShortInput({ value, onChange, style, ...props }) {
+  const [text, setText] = useState(formatMonthShort(value));
+
+  useEffect(() => {
+    setText(formatMonthShort(value));
+  }, [value]);
+
+  const commit = (nextText = text) => {
+    const parsed = parseMonthShort(nextText);
+    if (parsed) {
+      onChange(parsed);
+      setText(formatMonthShort(parsed));
+      return;
+    }
+    setText(formatMonthShort(value));
+  };
+
+  return (
+    <input
+      {...props}
+      type="text"
+      inputMode="numeric"
+      maxLength={5}
+      placeholder="MM/AA"
+      value={text}
+      style={{ ...style, width:78, minWidth:78, textAlign:"center" }}
+      onChange={e => {
+        const masked = maskMonthShort(e.target.value);
+        setText(masked);
+        const parsed = parseMonthShort(masked);
+        if (parsed) onChange(parsed);
+      }}
+      onBlur={() => commit()}
+      onKeyDown={e => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        }
+      }}
     />
   );
 }
@@ -1825,6 +1896,11 @@ export default function App() {
     tipo: "",
     status: "",
   });
+  const [projectionMode, setProjectionMode] = useState("ano");
+  const [projectionYear, setProjectionYear] = useState(String(Y));
+  const [projectionStartMonth, setProjectionStartMonth] = useState(selMonth);
+  const [projectionEndMonth, setProjectionEndMonth] = useState(monthOffset(selMonth, Math.max(1, parseInt(params.mesesProjecao, 10) || 3) - 1));
+  const [expandedProjectionMonths, setExpandedProjectionMonths] = useState({});
 
   useEffect(() => {
     const primeiraCC = contas.find(c => c.tipo === "corrente")?.id || contas[0]?.id || "cc1";
@@ -1944,7 +2020,38 @@ export default function App() {
     };
   }),[cards,contas,calcularFaturaCartao,simTrans,selMonth,faturas,trans]);
 
-  const projections = useMemo(()=>{ const fix=trans.filter(t=>t.fixo&&t.tipo==="despesa"); const fixM=[...new Set(fix.map(t=>transMonthKey(t)))]; const fixV=fixM.length?fix.reduce((s,t)=>s+t.valor,0)/fixM.length:0; const vari=trans.filter(t=>!t.fixo&&t.tipo==="despesa"); const varM=[...new Set(vari.map(t=>transMonthKey(t)))]; const varV=varM.length?vari.reduce((s,t)=>s+t.valor,0)/varM.length:0; return Array.from({length:params.mesesProjecao},(_,i)=>{ const dt=new Date(Y,M+1+i,1); return { label:`${MONTHS[dt.getMonth()]}/${dt.getFullYear()}`, value:fixV+varV, fixo:fixV, variavel:varV }; }); },[trans,params.mesesProjecao]);
+  const projections = useMemo(() => buildRealCashFlowProjection({
+    transactions: trans,
+    cards,
+    invoices: faturas,
+    simulationTransactions: simTrans,
+    mode: projectionMode,
+    year: projectionYear,
+    startMonth: projectionStartMonth,
+    endMonth: projectionEndMonth,
+    selectedMonth: selMonth,
+    numberOfMonths: params.mesesProjecao,
+    monthLabels: MONTHS,
+    getInitialBalanceForMonth: monthKey => contas.reduce((sum, conta) => sum + getSaldoInicialConta(conta, monthKey), 0),
+    getCardInvoiceTotal: (card, monthKey) => calcularFaturaCartao(card, monthKey).total,
+    getInvoiceId: invoiceIdFor,
+  }), [
+    trans, cards, faturas, simTrans, projectionMode, projectionYear,
+    projectionStartMonth, projectionEndMonth, selMonth, params.mesesProjecao,
+    contas, getSaldoInicialConta, calcularFaturaCartao
+  ]);
+
+  const projectionTotals = useMemo(() => projections.reduce((acc, item) => ({
+    receitas: acc.receitas + item.receitas,
+    despesas: acc.despesas + item.despesas,
+    faturas: acc.faturas + item.faturas,
+    simulacoes: acc.simulacoes + item.simulacoes,
+    entradas: acc.entradas + item.entradas,
+    saidas: acc.saidas + item.saidas,
+  }), { receitas:0, despesas:0, faturas:0, simulacoes:0, entradas:0, saidas:0 }), [projections]);
+
+  const projectionFirst = projections[0];
+  const projectionLast = projections[projections.length - 1];
 
   // Styles
   const card  = (x={})=>({ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:"18px 22px", ...x });
@@ -3606,22 +3713,142 @@ export default function App() {
         {tab==="projecoes"&&(
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div style={card()}>
-              <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>Projeção — Próximos {params.mesesProjecao} meses</div>
-              <div style={{ fontSize:13, color:C.soft, marginBottom:16 }}>Baseado em fixos + média de variáveis históricos</div>
-              <div style={{ display:"grid", gridTemplateColumns:`repeat(${Math.min(params.mesesProjecao,4)},1fr)`, gap:12 }}>
-                {projections.map(p=>(
-                  <div key={p.label} style={{ background:C.navy, borderRadius:9, padding:"16px 14px" }}>
-                    <div style={{ fontWeight:700, marginBottom:9 }}>{p.label}</div>
-                    <div style={big(C.gold)}>{fmtBRL(p.value)}</div>
-                    <div style={{ marginTop:9, display:"flex", flexDirection:"column", gap:4 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12 }}><span style={{ color:C.soft }}>Fixos</span><span>{fmtBRL(p.fixo)}</span></div>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12 }}><span style={{ color:C.soft }}>Variáveis</span><span>{fmtBRL(p.variavel)}</span></div>
-                    </div>
+              <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"flex-start", flexWrap:"wrap", marginBottom:14 }}>
+                <div>
+                  <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>Projeções reais e fluxo de caixa</div>
+                  <div style={{ fontSize:13, color:C.soft }}>Baseado em receitas, despesas, pagamentos de fatura e simulações existentes no sistema.</div>
+                </div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"end" }}>
+                  <div>
+                    <div style={lbl}>Modo</div>
+                    <select style={{ ...inp, width:130 }} value={projectionMode} onChange={e=>setProjectionMode(e.target.value)}>
+                      <option value="ano">Ano</option>
+                      <option value="periodo">Período</option>
+                    </select>
                   </div>
-                ))}
+                  {projectionMode==="ano" ? (
+                    <div>
+                      <div style={lbl}>Ano</div>
+                      <input style={{ ...inp, width:100 }} type="number" min="2000" max="2100" value={projectionYear} onChange={e=>setProjectionYear(e.target.value)} />
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <div style={lbl}>Início</div>
+                        <MonthShortInput style={inp} value={projectionStartMonth} onChange={setProjectionStartMonth} />
+                      </div>
+                      <div>
+                        <div style={lbl}>Fim</div>
+                        <MonthShortInput style={inp} value={projectionEndMonth} onChange={setProjectionEndMonth} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:16 }}>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saldo inicial</div><div style={big(C.text)}>{fmtBRL(projectionFirst?.saldoInicial || 0)}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Entradas</div><div style={big(C.emerald)}>{fmtBRL(projectionTotals.entradas)}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saídas</div><div style={big(C.coral)}>{fmtBRL(projectionTotals.saidas)}</div></div>
+                <div style={{ background:C.navy, borderRadius:9, padding:"13px 14px" }}><div style={lbl}>Saldo final projetado</div><div style={big((projectionLast?.saldoProjetado || 0) < 0 ? C.coral : C.gold)}>{fmtBRL(projectionLast?.saldoProjetado || 0)}</div></div>
+              </div>
+
+              <CashFlowChart
+                data={projections}
+                height={260}
+                colors={{ saldo:C.gold, entradas:C.emerald, saidas:C.coral, text:C.text, soft:C.soft, grid:C.border }}
+              />
+            </div>
+
+            <div style={card()}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:12 }}>Detalhamento por competência</div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:940 }}>
+                  <thead>
+                    <tr style={{ background:C.border }}>
+                      {["","Mês","Saldo inicial","Receitas","Despesas","Faturas","Simulações","Fluxo líquido","Saldo projetado"].map((h,i)=>(
+                        <th key={h || "detalhe"} style={{ padding:"8px 10px", textAlign:i<=1?"left":"right", color:C.soft, fontSize:10 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projections.map(p=>{
+                      const saldoNegativo = p.saldoProjetado < 0;
+                      const expanded = Boolean(expandedProjectionMonths[p.monthKey]);
+                      const detalhes = p.detalhes || { receitas:[], despesas:[], faturas:[], simulacoes:[] };
+                      const detailGroups = [
+                        { key:"faturas", label:"Cartões / Faturas", color:C.gold, sign:"-", rows:detalhes.faturas || [] },
+                        { key:"simulacoes", label:"Simulações", color:"#CE93D8", sign:"-", rows:detalhes.simulacoes || [] },
+                      ];
+                      const totalItens = detailGroups.reduce((sum, group) => sum + group.rows.length, 0);
+                      return (
+                        <Fragment key={p.monthKey}>
+                          <tr style={{ borderTop:`1px solid ${C.border}`, background:saldoNegativo?C.coral+"10":"transparent" }}>
+                            <td style={{ padding:"8px 10px", width:42 }}>
+                              <button
+                                type="button"
+                                title={expanded ? "Ocultar detalhes" : "Exibir detalhes"}
+                                onClick={()=>setExpandedProjectionMonths(prev=>({ ...prev, [p.monthKey]:!prev[p.monthKey] }))}
+                                style={{ background:expanded?C.gold+"22":C.navy, border:`1px solid ${expanded?C.gold:C.border}`, borderRadius:7, color:expanded?C.gold:C.soft, cursor:"pointer", width:28, height:24, fontWeight:800 }}
+                              >{expanded?"−":"+"}</button>
+                            </td>
+                            <td style={{ padding:"8px 10px", fontWeight:700 }}>{p.label}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right" }}>{fmtBRL(p.saldoInicial)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:C.emerald }}>{fmtBRL(p.receitas)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:C.coral }}>{fmtBRL(p.despesas)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:p.faturas>0?C.gold:C.soft }}>{p.faturas>0?fmtBRL(p.faturas):"—"}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:p.simulacoes>0?"#CE93D8":C.soft }}>{p.simulacoes>0?fmtBRL(p.simulacoes):"—"}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:p.fluxoLiquido<0?C.coral:C.emerald, fontWeight:700 }}>{fmtBRL(p.fluxoLiquido)}</td>
+                            <td style={{ padding:"8px 10px", textAlign:"right", color:saldoNegativo?C.coral:C.gold, fontWeight:800 }}>{fmtBRL(p.saldoProjetado)}</td>
+                          </tr>
+                          {expanded&&(
+                            <tr key={`${p.monthKey}_details`} style={{ background:C.navy }}>
+                              <td colSpan={9} style={{ padding:"12px 14px", borderTop:`1px solid ${C.border}` }}>
+                                {totalItens===0 ? (
+                                  <div style={{ color:C.soft, fontSize:12 }}>Nenhuma fatura ou simulação encontrada para esta competência.</div>
+                                ) : (
+                                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
+                                    {detailGroups.map(group=>(
+                                      <div key={group.key} style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, padding:"11px 12px" }}>
+                                        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                                          <div style={{ fontWeight:800, color:group.color, fontSize:12 }}>{group.label}</div>
+                                          <div style={{ fontSize:10, color:C.soft }}>{group.rows.length} item{group.rows.length===1?"":"s"}</div>
+                                        </div>
+                                        {group.rows.length===0 ? (
+                                          <div style={{ color:C.soft, fontSize:11 }}>Sem itens.</div>
+                                        ) : group.rows.slice(0,8).map(item=>(
+                                          <div key={item.id} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8, borderTop:`1px solid ${C.border}`, padding:"7px 0" }}>
+                                            <div style={{ minWidth:0 }}>
+                                              <div style={{ fontWeight:700, fontSize:12, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.descricao}</div>
+                                              <div style={{ fontSize:10, color:C.soft }}>{[item.data&&fmtDate(item.data), item.status, item.origem, item.parcela?`${item.parcela}/${item.totalParcelas}`:""].filter(Boolean).join(" · ")}</div>
+                                              {item.catId&&<div style={{ fontSize:10, color:C.soft }}>{getCatLabel(item.catId)}</div>}
+                                            </div>
+                                            <div style={{ color:group.color, fontWeight:800, fontSize:12, textAlign:"right" }}>{group.sign} {fmtBRL(item.valor)}</div>
+                                          </div>
+                                        ))}
+                                        {group.rows.length>8&&<div style={{ color:C.soft, fontSize:10, marginTop:6 }}>+ {group.rows.length-8} item{group.rows.length-8===1?"":"s"} não exibido{group.rows.length-8===1?"":"s"}.</div>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize:11, color:C.soft, marginTop:10 }}>
+                O detalhamento exibe apenas cartões/faturas e simulações para reduzir poluição visual. Receitas e despesas permanecem consolidadas nos totais mensais.
               </div>
             </div>
-            <div style={card()}><div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>Histórico</div><BarChart data={last6} color={C.gold} height={110}/></div>
+
+            <div style={card()}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:16 }}>Histórico de despesas realizadas</div>
+              <BarChart data={last6} color={C.gold} height={110}/>
+            </div>
           </div>
         )}
 
