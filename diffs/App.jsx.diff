@@ -1,0 +1,83 @@
+--- /home/claude/hotfix/src/App.jsx	2026-07-05 15:51:03.427624931 +0000
++++ src/App.jsx	2026-07-05 16:59:02.498018377 +0000
+@@ -6,10 +6,11 @@
+ import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
+ import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
+ import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
++import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
+ import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
+ import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset, todayIso, todayMonthKey } from "./utils/dateUtils.js";
+-import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
+-import { closeInvoice, reopenInvoice, addInvoiceAdjustment } from "./services/cardInvoiceOperations.js";
++import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
++import { closeInvoice, reopenInvoice, addInvoiceAdjustment, computeCardInvoice, resolveInvoiceCategoryId } from "./services/cardInvoiceOperations.js";
+ import { buildProjectionInsights, buildRealCashFlowProjection } from "./services/projectionService.js";
+ import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
+ import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
+@@ -182,6 +183,12 @@
+   moeda:"BRL", alertaLimite:85, alertaSaldo:true,
+   mesesProjecao:3, categAutoImport:true, duplaEntradaDias:3,
+   corAlerta:"#E8504A", corOK:"#00A878", corAtencao:"#F5B700",
++  // v0.3.28 — E6: categoria de pagamento/ajuste de fatura configurável.
++  // Antes era "cat10" fixo no código; se a categoria fosse excluída, os
++  // pagamentos futuros nasciam órfãos. Agora é um parâmetro, com fallback
++  // para "cat10" (categoria padrão "Outros", que nunca é removida da lista
++  // inicial) caso o valor configurado aponte para uma categoria inexistente.
++  catIdPagamentoFatura: "cat10",
+ };
+ 
+ const TODAY = new Date();
+@@ -1981,7 +1988,7 @@
+ // ── Main App
+ export default function App() {
+   const [tab,      setTab]      = useState("dashboard");
+-  const [trans,    setTrans]    = useLS("trans",  INIT_TRANS);
++  const [trans,    setTrans]    = useTransactionsStorage(INIT_TRANS); // v0.3.28 — normaliza dual-write (E2) na fronteira
+   const [contas,   setContas]   = useLS("contas", INIT_CONTAS);
+   const [metas,    setMetas]    = useLS("metas",  INIT_METAS);
+   const [pessoas,  setPessoas]  = useLS("pessoas", INIT_PESSOAS);
+@@ -2092,11 +2099,12 @@
+     }));
+   }, [setSaldosIniciais]);
+ 
++  // v0.3.28 — unificação: antes havia dois cálculos equivalentes (este e
++  // computeCardInvoice em cardInvoiceOperations.js). Agora o App delega ao
++  // serviço puro; o comportamento é idêntico (mesmo teste de caracterização
++  // da v0.3.27 cobre este cálculo).
+   const calcularFaturaCartao = useCallback((card, monthKey = selMonth) => {
+-    const itens = trans.filter(t => t.cartaoId === card.id && t.origem === "cartao" && transMonthKey(t) === monthKey);
+-    const total = itens.reduce((sum, t) => sum + signedCardAmount(t), 0);
+-    const ajustes = itens.filter(t => t.natureza === "ajuste_fatura_cartao").reduce((sum, t) => sum + signedCardAmount(t), 0);
+-    return { itens, total: Math.max(0, Number(total.toFixed(2))), ajustes };
++    return computeCardInvoice(trans, card, monthKey);
+   }, [trans, selMonth]);
+ 
+   // Receitas/despesas realizadas = valores pagos/baixados. Previstos não impactam saldo realizado.
+@@ -2499,9 +2507,10 @@
+     if (!descricao?.trim()) { alert("A descrição do ajuste é obrigatória."); return; }
+ 
+     // v0.3.27 — operação atômica: o serviço puro devolve o próximo `trans`.
++    const catId = resolveInvoiceCategoryId(cats, params.catIdPagamentoFatura); // v0.3.28 — E6
+     const res = addInvoiceAdjustment(
+       { trans, faturas, cards, contas },
+-      { cardId, monthKey: selMonth, tipoAjuste, valor, descricao, uid, day: TODAY.getDate() }
++      { cardId, monthKey: selMonth, tipoAjuste, valor, descricao, uid, day: TODAY.getDate(), catId }
+     );
+     if (!res.ok) {
+       if (res.reason === "invoice_closed") {
+@@ -2518,12 +2527,13 @@
+     const card = cards.find(c => c.id === cardId);
+     if (!card) return;
+     const state = { trans, faturas, cards, contas };
++    const catId = resolveInvoiceCategoryId(cats, params.catIdPagamentoFatura); // v0.3.28 — E6
+     // 1ª tentativa sem confirmar atualização de pagamento existente.
+-    let res = closeInvoice(state, { cardId, monthKey: selMonth, uid });
++    let res = closeInvoice(state, { cardId, monthKey: selMonth, uid, catId });
+     if (!res.ok && res.reason === "needs_confirm_update") {
+       const atualizar = window.confirm("Esta fatura já possui pagamento previsto. Deseja atualizar o valor previsto mantendo as baixas já feitas?");
+       if (!atualizar) return;
+-      res = closeInvoice(state, { cardId, monthKey: selMonth, uid, confirmUpdateExisting: true });
++      res = closeInvoice(state, { cardId, monthKey: selMonth, uid, catId, confirmUpdateExisting: true });
+     }
+     if (!res.ok) {
+       if (res.reason === "no_account") alert("Cartão sem conta corrente associada.");

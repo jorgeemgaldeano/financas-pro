@@ -1,0 +1,19 @@
+--- /mnt/project/dateUtils.js	2026-07-05 13:38:37.280471609 +0000
++++ src/utils/dateUtils.js	2026-07-05 13:44:22.620493546 +0000
+@@ -2,6 +2,16 @@
+ 
+ export const mKey = value => (value || "").slice(0, 7);
+ 
++// v0.3.26.7 — E1: data "de hoje" derivada de componentes LOCAIS (nunca UTC).
++// Usar new Date().toISOString() para obter o dia/mês corrente causa deslocamento
++// de fuso (em São Paulo, UTC-3, à noite o ISO já aponta para o dia seguinte).
++export const todayIso = () => {
++  const d = new Date();
++  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
++};
++
++export const todayMonthKey = () => todayIso().slice(0, 7);
++
+ export const addMonthsToMonthKey = (monthKey, amount) => {
+   const [year, month] = monthKey.split("-").map(Number);
+   const date = new Date(year, month - 1 + amount, 1);

@@ -17,5 +17,9 @@
     "react-dom": "latest",
     "recharts": "latest",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.9",
+    "vitest": "^4.1.9"
   }
 }

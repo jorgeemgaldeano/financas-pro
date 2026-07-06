@@ -6,11 +6,9 @@ import { guessCategoryForTransaction, normText } from "./services/categoryServic
 import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
 import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
-import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset, todayIso, todayMonthKey } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
-import { closeInvoice, reopenInvoice, addInvoiceAdjustment, computeCardInvoice, resolveInvoiceCategoryId } from "./services/cardInvoiceOperations.js";
 import { buildProjectionInsights, buildRealCashFlowProjection } from "./services/projectionService.js";
 import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
 import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
@@ -183,12 +181,6 @@ const INIT_PARAMS = {
   moeda:"BRL", alertaLimite:85, alertaSaldo:true,
   mesesProjecao:3, categAutoImport:true, duplaEntradaDias:3,
   corAlerta:"#E8504A", corOK:"#00A878", corAtencao:"#F5B700",
-  // v0.3.28 — E6: categoria de pagamento/ajuste de fatura configurável.
-  // Antes era "cat10" fixo no código; se a categoria fosse excluída, os
-  // pagamentos futuros nasciam órfãos. Agora é um parâmetro, com fallback
-  // para "cat10" (categoria padrão "Outros", que nunca é removida da lista
-  // inicial) caso o valor configurado aponte para uma categoria inexistente.
-  catIdPagamentoFatura: "cat10",
 };
 
 const TODAY = new Date();
@@ -1988,7 +1980,7 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
 // ── Main App
 export default function App() {
   const [tab,      setTab]      = useState("dashboard");
-  const [trans,    setTrans]    = useTransactionsStorage(INIT_TRANS); // v0.3.28 — normaliza dual-write (E2) na fronteira
+  const [trans,    setTrans]    = useLS("trans",  INIT_TRANS);
   const [contas,   setContas]   = useLS("contas", INIT_CONTAS);
   const [metas,    setMetas]    = useLS("metas",  INIT_METAS);
   const [pessoas,  setPessoas]  = useLS("pessoas", INIT_PESSOAS);
@@ -2099,12 +2091,11 @@ export default function App() {
     }));
   }, [setSaldosIniciais]);
 
-  // v0.3.28 — unificação: antes havia dois cálculos equivalentes (este e
-  // computeCardInvoice em cardInvoiceOperations.js). Agora o App delega ao
-  // serviço puro; o comportamento é idêntico (mesmo teste de caracterização
-  // da v0.3.27 cobre este cálculo).
   const calcularFaturaCartao = useCallback((card, monthKey = selMonth) => {
-    return computeCardInvoice(trans, card, monthKey);
+    const itens = trans.filter(t => t.cartaoId === card.id && t.origem === "cartao" && transMonthKey(t) === monthKey);
+    const total = itens.reduce((sum, t) => sum + signedCardAmount(t), 0);
+    const ajustes = itens.filter(t => t.natureza === "ajuste_fatura_cartao").reduce((sum, t) => sum + signedCardAmount(t), 0);
+    return { itens, total: Math.max(0, Number(total.toFixed(2))), ajustes };
   }, [trans, selMonth]);
 
   // Receitas/despesas realizadas = valores pagos/baixados. Previstos não impactam saldo realizado.
@@ -2505,57 +2496,181 @@ export default function App() {
     if (valor <= 0) { alert("Informe um valor válido."); return; }
     const descricao = window.prompt("Descrição do ajuste", tipoAjuste === "acrescimo" ? "Ajuste de acréscimo da fatura" : "Ajuste de redução da fatura");
     if (!descricao?.trim()) { alert("A descrição do ajuste é obrigatória."); return; }
-
-    // v0.3.27 — operação atômica: o serviço puro devolve o próximo `trans`.
-    const catId = resolveInvoiceCategoryId(cats, params.catIdPagamentoFatura); // v0.3.28 — E6
-    const res = addInvoiceAdjustment(
-      { trans, faturas, cards, contas },
-      { cardId, monthKey: selMonth, tipoAjuste, valor, descricao, uid, day: TODAY.getDate(), catId }
-    );
-    if (!res.ok) {
-      if (res.reason === "invoice_closed") {
-        alert(`A fatura de ${card?.nome} está fechada. Reabra-a para incluir ajustes.`);
-      } else {
-        alert("Não foi possível registrar o ajuste.");
-      }
-      return;
-    }
-    setTrans(res.trans);
+    setTrans(prev => [...prev, {
+      id: uid(),
+      tipo: tipoAjuste === "reducao" ? "receita" : "despesa",
+      origem: "cartao",
+      natureza: "ajuste_fatura_cartao",
+      ajusteFaturaTipo: tipoAjuste,
+      catId: "cat10",
+      descricao: descricao.trim(),
+      valor,
+      data: dateForMonthDay(selMonth, TODAY.getDate()),
+      competencia: selMonth,
+      cartaoId: cardId,
+      contaId: null,
+      fixo: false,
+      status: "pago",
+      valorPago: valor,
+    }]);
   };
 
   const fecharFaturaCartao = (cardId) => {
     const card = cards.find(c => c.id === cardId);
     if (!card) return;
-    const state = { trans, faturas, cards, contas };
-    const catId = resolveInvoiceCategoryId(cats, params.catIdPagamentoFatura); // v0.3.28 — E6
-    // 1ª tentativa sem confirmar atualização de pagamento existente.
-    let res = closeInvoice(state, { cardId, monthKey: selMonth, uid, catId });
-    if (!res.ok && res.reason === "needs_confirm_update") {
+    const contaPagamentoId = getCardPaymentAccountId(card, primeiraContaCorrenteId);
+    if (!contaPagamentoId) { alert("Cartão sem conta corrente associada."); return; }
+    const fat = calcularFaturaCartao(card, selMonth);
+    const totalFatura = roundMoney(fat.total);
+    if (totalFatura <= 0) { alert("Não há valor de fatura para fechar neste mês."); return; }
+
+    const invoiceId = invoiceIdFor(cardId, selMonth);
+    const paymentMonth = monthOffset(selMonth, 1);
+    const paymentDate = dateForMonthDay(paymentMonth, card.vencimento);
+    const existingInvoice = getInvoiceRecordFor(faturas, cardId, selMonth) || faturas.find(f => f.id === invoiceId);
+    const existingPayment = (existingInvoice?.paymentTransactionId ? trans.find(t => t.id === existingInvoice.paymentTransactionId) : null)
+      || trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao")
+      || trans.find(t => t.faturaMes === selMonth && t.cartaoId === cardId && t.natureza === "fatura_cartao");
+    const paymentTransactionId = existingPayment?.id || existingInvoice?.paymentTransactionId || uid();
+
+    if (existingPayment) {
       const atualizar = window.confirm("Esta fatura já possui pagamento previsto. Deseja atualizar o valor previsto mantendo as baixas já feitas?");
       if (!atualizar) return;
-      res = closeInvoice(state, { cardId, monthKey: selMonth, uid, catId, confirmUpdateExisting: true });
+      setTrans(prev => prev.map(t => t.id === existingPayment.id ? {
+        ...t,
+        valor: totalFatura,
+        amount: totalFatura,
+        data: paymentDate,
+        competencia: paymentMonth,
+        competenceMonth: paymentMonth,
+        contaId: contaPagamentoId,
+        accountId: contaPagamentoId,
+        cartaoId: cardId,
+        cardId,
+        invoiceId,
+        faturaMes: selMonth,
+        status: paymentStatusByPaidAmount(t.valorPago ?? t.paidAmount, totalFatura),
+        valorPago: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        paidAmount: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago ?? t.paidAmount) || 0))),
+        updatedAt: new Date().toISOString(),
+      } : t));
+    } else {
+      setTrans(prev => [...prev, {
+        id: paymentTransactionId,
+        tipo: "despesa",
+        origem: "corrente",
+        natureza: "fatura_cartao",
+        catId: "cat10",
+        descricao: `Pagamento fatura ${card.nome} - ${selMonth}`,
+        valor: totalFatura,
+        amount: totalFatura,
+        data: paymentDate,
+        competencia: paymentMonth,
+        competenceMonth: paymentMonth,
+        contaId: contaPagamentoId,
+        accountId: contaPagamentoId,
+        cartaoId: cardId,
+        cardId,
+        invoiceId,
+        faturaMes: selMonth,
+        status: "previsto",
+        valorPago: 0,
+        paidAmount: 0,
+        pendingAmount: totalFatura,
+        fixo: false,
+      }]);
     }
-    if (!res.ok) {
-      if (res.reason === "no_account") alert("Cartão sem conta corrente associada.");
-      else if (res.reason === "no_amount") alert("Não há valor de fatura para fechar neste mês.");
-      return;
-    }
-    // v0.3.27 — operação atômica: ambos os estados vêm do mesmo snapshot.
-    setTrans(res.trans);
-    setFaturas(res.faturas);
+
+    setFaturas(prev => {
+      const valorPagoAtual = roundMoney(Number(existingPayment?.valorPago ?? existingPayment?.paidAmount) || 0);
+      const nova = {
+        id: invoiceId,
+        cardId,
+        accountId: contaPagamentoId,
+        contaPagamentoId,
+        competenceMonth: selMonth,
+        dueMonth: paymentMonth,
+        status: invoiceStatusByPayment(valorPagoAtual, totalFatura),
+        expensesTotal: roundMoney(totalFatura - fat.ajustes),
+        adjustmentsTotal: roundMoney(fat.ajustes),
+        finalAmount: totalFatura,
+        paidAmount: valorPagoAtual,
+        pendingAmount: Math.max(0, roundMoney(totalFatura - valorPagoAtual)),
+        paymentTransactionId,
+        closureType: "manual",
+        fechamentoTipo: "manual",
+        closedBy: "manual",
+        closedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return prev.some(f => f.id === invoiceId) ? prev.map(f => f.id === invoiceId ? { ...f, ...nova } : f) : [...prev, nova];
+    });
   };
 
   const abrirFaturaCartao = (cardId) => {
     const card = cards.find(c => c.id === cardId);
     if (!card) return;
-    const res = reopenInvoice({ trans, faturas, cards, contas }, { cardId, monthKey: selMonth, uid });
-    if (!res.ok) {
-      if (res.reason === "no_account") alert("Cartão sem conta corrente associada.");
-      return;
+    const contaPagamentoId = getCardPaymentAccountId(card, primeiraContaCorrenteId);
+    if (!contaPagamentoId) { alert("Cartão sem conta corrente associada."); return; }
+
+    const invoiceId = invoiceIdFor(cardId, selMonth);
+    const existingInvoice = getInvoiceRecordFor(faturas, cardId, selMonth) || faturas.find(f => f.id === invoiceId);
+    const existingPayment = existingInvoice?.paymentTransactionId
+      ? trans.find(t => t.id === existingInvoice.paymentTransactionId)
+      : trans.find(t => t.invoiceId === invoiceId && t.natureza === "fatura_cartao");
+
+    const fat = calcularFaturaCartao(card, selMonth);
+    const totalFatura = roundMoney(fat.total);
+    const valorPagoAtual = roundMoney(Number(existingPayment?.valorPago) || Number(existingInvoice?.paidAmount) || 0);
+    const paymentMonth = monthOffset(selMonth, 1);
+    const paymentDate = dateForMonthDay(paymentMonth, card.vencimento);
+
+    if (existingPayment) {
+      setTrans(prev => prev.map(t => t.id === existingPayment.id ? {
+        ...t,
+        valor: totalFatura,
+        amount: totalFatura,
+        data: paymentDate,
+        competencia: paymentMonth,
+        competenceMonth: paymentMonth,
+        contaId: contaPagamentoId,
+        accountId: contaPagamentoId,
+        cartaoId: cardId,
+        cardId,
+        invoiceId,
+        faturaMes: selMonth,
+        status: paymentStatusByPaidAmount(t.valorPago ?? t.paidAmount, totalFatura),
+        valorPago: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        paidAmount: roundMoney(Number(t.valorPago ?? t.paidAmount) || 0),
+        pendingAmount: Math.max(0, roundMoney(totalFatura - (Number(t.valorPago ?? t.paidAmount) || 0))),
+        updatedAt: new Date().toISOString(),
+      } : t));
     }
-    // v0.3.27 — operação atômica: ambos os estados vêm do mesmo snapshot.
-    setTrans(res.trans);
-    setFaturas(res.faturas);
+
+    setFaturas(prev => {
+      const nova = {
+        id: invoiceId,
+        cardId,
+        accountId: contaPagamentoId,
+        contaPagamentoId,
+        competenceMonth: selMonth,
+        dueMonth: paymentMonth,
+        status: "aberta",
+        expensesTotal: roundMoney(totalFatura - fat.ajustes),
+        adjustmentsTotal: roundMoney(fat.ajustes),
+        finalAmount: totalFatura,
+        paidAmount: valorPagoAtual,
+        pendingAmount: Math.max(0, roundMoney(totalFatura - valorPagoAtual)),
+        paymentTransactionId: existingPayment?.id || existingInvoice?.paymentTransactionId || null,
+        closureType: "open",
+        fechamentoTipo: "reaberta",
+        closedBy: null,
+        reopenedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return prev.some(f => f.id === invoiceId) ? prev.map(f => f.id === invoiceId ? { ...f, ...nova } : f) : [...prev, nova];
+    });
   };
 
   // Simulation

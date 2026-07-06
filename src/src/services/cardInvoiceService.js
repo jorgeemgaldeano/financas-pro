@@ -1,4 +1,5 @@
-import { dateForMonthDay, mKey, monthOffset } from "../utils/dateUtils.js";
+import { dateForMonthDay, mKey, monthOffset, todayIso, todayMonthKey } from "../utils/dateUtils.js";
+import { moneyToNumber } from "../utils/moneyUtils.js";
 
 export const CLOSED_INVOICE_STATUSES = ["fechada", "parcialmente_paga", "paga"];
 
@@ -25,6 +26,21 @@ export const paymentStatusByPaidAmount = (paidAmount, totalAmount) => {
 };
 
 export const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+const safeMoneyAmount = (value) => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  return moneyToNumber(value);
+};
+
+const getSimulationInstallmentValue = (sim) => {
+  const parcelas = Math.max(1, parseInt(sim?.parcelas, 10) || 1);
+  const valorBase = safeMoneyAmount(sim?.valor);
+
+  return roundMoney(sim?.modoParc === "total" ? valorBase / parcelas : valorBase);
+};
 
 export const invoicePaymentLabel = (paidAmount, totalAmount) => {
   const paid = roundMoney(paidAmount);
@@ -54,7 +70,7 @@ export const getInvoiceClosureStatusForMonth = (
   faturas,
   card,
   monthKey,
-  todayKey = new Date().toISOString().slice(0, 10)
+  todayKey = todayIso()
 ) => {
   if (!card || !monthKey) return "open";
   const invoiceRecord = getInvoiceRecordFor(faturas, card.id, monthKey);
@@ -76,7 +92,7 @@ export const isInvoiceClosedForNewEntries = (faturas, card, monthKey) => {
 };
 
 export const getCardInvoiceCompetence = (dateKey, card) => {
-  if (!dateKey) return mKey(new Date().toISOString());
+  if (!dateKey) return todayMonthKey();
   const baseMonth = mKey(dateKey);
   if (!card) return baseMonth;
   const day = parseInt(String(dateKey).slice(8, 10), 10) || 1;

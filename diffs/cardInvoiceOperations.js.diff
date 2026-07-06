@@ -1,0 +1,38 @@
+--- /home/claude/hotfix/src/services/cardInvoiceOperations.js	2026-07-05 15:49:19.145963079 +0000
++++ src/services/cardInvoiceOperations.js	2026-07-05 16:59:16.060814893 +0000
+@@ -33,6 +33,18 @@
+ const nowIso = () => new Date().toISOString();
+ 
+ // Gerador de id de fallback caso o wrapper não injete um (testes).
++// ── Resolução da categoria de pagamento/ajuste de fatura (E6) ───────────────
++// Valida o parâmetro configurável contra a lista real de categorias; se a
++// categoria configurada não existir (ex.: foi excluída pelo usuário), cai
++// para "cat10" (categoria padrão "Outros", que não é removível pela UI).
++export function resolveInvoiceCategoryId(cats, configuredCatId) {
++  const list = Array.isArray(cats) ? cats : [];
++  if (configuredCatId && list.some((c) => c.id === configuredCatId)) {
++    return configuredCatId;
++  }
++  return "cat10";
++}
++
+ const fallbackUid = () =>
+   "id_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 11);
+ 
+@@ -98,6 +110,7 @@
+   const { cardId, monthKey, confirmUpdateExisting = false } = opts;
+   const uid = opts.uid || fallbackUid;
+   const now = opts.now || nowIso();
++  const catId = opts.catId || "cat10"; // v0.3.28 — E6: configurável via params.catIdPagamentoFatura
+ 
+   const card = cards.find((c) => c.id === cardId);
+   if (!card) return { ok: false, reason: "card_not_found" };
+@@ -141,7 +154,7 @@
+         tipo: "despesa",
+         origem: "corrente",
+         natureza: "fatura_cartao",
+-        catId: "cat10",
++        catId,
+         descricao: `Pagamento fatura ${card.nome} - ${monthKey}`,
+         valor: totalFatura,
+         amount: totalFatura,

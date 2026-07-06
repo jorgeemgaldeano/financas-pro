@@ -1,4 +1,5 @@
-import { dateForMonthDay, mKey, monthOffset } from "../utils/dateUtils.js";
+import { dateForMonthDay, mKey, monthOffset, todayIso, todayMonthKey } from "../utils/dateUtils.js";
+import { moneyToNumber } from "../utils/moneyUtils.js";
 
 export const CLOSED_INVOICE_STATUSES = ["fechada", "parcialmente_paga", "paga"];
 
@@ -69,7 +70,7 @@ export const getInvoiceClosureStatusForMonth = (
   faturas,
   card,
   monthKey,
-  todayKey = new Date().toISOString().slice(0, 10)
+  todayKey = todayIso()
 ) => {
   if (!card || !monthKey) return "open";
   const invoiceRecord = getInvoiceRecordFor(faturas, card.id, monthKey);
@@ -86,12 +87,12 @@ export const isInvoiceClosed = (faturas, cardId, monthKey) => {
   return Boolean(invoiceRecord && CLOSED_INVOICE_STATUSES.includes(invoiceRecord.status));
 };
 
-export const isInvoiceClosedForNewEntries = (faturas, card, monthKey) => {
-  return getInvoiceClosureStatusForMonth(faturas, card, monthKey) !== "open";
+export const isInvoiceClosedForNewEntries = (faturas, card, monthKey, todayKey) => {
+  return getInvoiceClosureStatusForMonth(faturas, card, monthKey, todayKey) !== "open";
 };
 
 export const getCardInvoiceCompetence = (dateKey, card) => {
-  if (!dateKey) return mKey(new Date().toISOString());
+  if (!dateKey) return todayMonthKey();
   const baseMonth = mKey(dateKey);
   if (!card) return baseMonth;
   const day = parseInt(String(dateKey).slice(8, 10), 10) || 1;
