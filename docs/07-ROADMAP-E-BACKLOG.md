@@ -920,7 +920,85 @@ após aprovação da v0.3.31. Ver `DEC-0033`.
 - [ ] Revisar textos de ajuda da classificação de crédito de cartão com
   base em mais casos reais, se o usuário fornecer novos arquivos de teste.
 
-### v0.3.33 — Performance e cálculo
+### v0.3.33 — Transferências entre contas
+
+Planejado em 2026-07-08 (reprioriza o slot; performance/importação/
+modularização desceram para v0.3.35/36/37). Decisões do usuário registradas
+abaixo; detalhe conceitual a virar `DEC-00XX` antes de codificar.
+
+**Objetivo:** transferência entre contas cadastradas é movimento nulo (sai de
+uma, entra na outra) e **não** deve contar como receita nem despesa — só
+afeta o saldo das contas envolvidas.
+
+**Modelo de dados (proposto, sem alteração de chave/schema):**
+
+- Uma transferência = **duas transações ligadas** por um `transferId` comum,
+  ambas com `natureza:"transferencia"`: uma saída na conta origem e uma
+  entrada na conta destino. O campo `natureza` já existe — sem nova chave de
+  LocalStorage, sem migração obrigatória.
+- Regra transversal: **excluir `natureza:"transferencia"` de todas as
+  agregações de receita/despesa** (Dashboard, Projeções, relatórios). São
+  ~57 pontos de filtro `tipo==="receita"/"despesa"` no `App.jsx` +
+  `projectionService` — antes de codificar, avaliar centralizar num helper
+  (`isMovimentoContabil(t)` / `somaReceitas`/`somaDespesas`) para não
+  espalhar a exclusão. O saldo por conta continua incluindo as duas pernas.
+- **Caracterização ANTES** (travar o valor atual de Dashboard/Projeções) para
+  garantir que a exclusão não altere números de quem não usa transferência.
+
+**Escopo funcional (decisão do usuário: manual + auto-detecção na importação):**
+
+- [ ] Criar transferência manual: escolher conta origem, conta destino, valor
+  e data → gera o par ligado atomicamente (padrão snapshot completo).
+- [ ] Desfazer/editar transferência tratando as duas pernas como uma unidade.
+- [ ] Auto-detectar na importação: débito numa conta cadastrada que casa com
+  crédito em outra (mesmo valor, janela de dias — reusar
+  `params.duplaEntradaDias`), oferecendo vincular como transferência na
+  prévia. Não vincular automaticamente sem confirmação.
+- [ ] Exibir transferências de forma distinta na aba Lançamentos (não como
+  entrada/saída) e garantir que filtros e saldos batam.
+- [ ] Incluir no backup/restauração (as pernas já são `trans`, então cobertas;
+  validar que o `transferId` sobrevive ao ciclo).
+
+**Riscos:** mudança transversal na agregação (maior risco da versão);
+consultar `especialista-financas` (RN de saldo/previsto-realizado) e
+`arquiteto-operacoes-atomicas` (par atômico). Não bumpar `LS_VERSION`.
+
+### v0.3.34 — Cofrinhos (objetivos de poupança)
+
+Planejado em 2026-07-08. Nome **"Cofrinhos"** (decisão do usuário) para não
+colidir com a aba **"Metas"** já existente, que é orçamento/limite por
+categoria (`metas: {}` por `catId`) — coisa diferente.
+
+**Objetivo:** aba para criar um objetivo com valor-alvo e data-alvo, controlar
+o saldo guardado e simular o aporte mensal necessário para atingir a meta a
+partir do mês atual.
+
+**Modelo de dados (NOVA entidade persistida → território `guardiao-localstorage`):**
+
+- [ ] Nova chave de LocalStorage `cofrinhos` (array). Estrutura por item
+  (proposta): `{ id, nome, valorAlvo, dataAlvo, aportes:[{ id, data, valor,
+  tipo:"aporte"|"retirada" }], cor?, icon?, arquivado? }`. Saldo = soma dos
+  aportes − retiradas (**ledger próprio, aportes manuais** — decisão do
+  usuário; sem acoplamento a contas, sem risco de dupla contagem).
+- [ ] Entrar em `BACKUP_STORAGE_KEYS`, backup/restauração e no
+  `migrationPipeline` com default seguro `[]` para dados antigos (RN002).
+  Aditivo — **sem bump de `LS_VERSION`**.
+
+**Escopo funcional:**
+
+- [ ] CRUD de cofrinho (nome, valor-alvo, data-alvo).
+- [ ] Registrar aporte/retirada, com saldo acumulado e % do alvo.
+- [ ] **Simulação do aporte mensal**: `(valorAlvo − saldoAtual) / meses entre
+  o mês atual e a dataAlvo`. Exibir também projeção "no ritmo atual, atinge
+  em MM/AAAA". Reaproveitar utilitários de mês (`dateUtils`) e monetários.
+- [ ] Estado visual: em dia / atrasado / concluído.
+- [ ] Testes unitários do cálculo de simulação e do saldo do ledger.
+
+**Riscos:** baixo em cálculo (ledger isolado), médio em persistência (chave
+nova) — a migração/backup é o ponto de atenção. Não altera nenhuma RN
+existente; adiciona entidade nova.
+
+### v0.3.35 — Performance e cálculo
 
 - [ ] Corrigir a complexidade quadrática do cálculo de saldo (item E4, já
   mapeado desde a sessão de 2026-07-05) — centralizar em função memoizada
@@ -933,7 +1011,7 @@ após aprovação da v0.3.31. Ver `DEC-0033`.
   (`useMemo`/`useCallback` já usados em parte, mas não auditados
   sistematicamente).
 
-### v0.3.34 — Importação avançada
+### v0.3.36 — Importação avançada
 
 - [ ] Permitir classificar em lote linhas de crédito semelhantes na
   prévia de importação (ex.: aplicar a mesma classificação a todas as
@@ -947,7 +1025,7 @@ após aprovação da v0.3.31. Ver `DEC-0033`.
   então implementar a chamada real em `aiCategorizationService.js`
   (hoje só scaffold, ver `DEC-0031`). Não iniciar sem essa decisão.
 
-### v0.3.35 — Modularização estrutural
+### v0.3.37 — Modularização estrutural
 
 - [ ] Extrair `simulationService.js` (cálculo de simulações hoje dentro
   de `App.jsx`).
