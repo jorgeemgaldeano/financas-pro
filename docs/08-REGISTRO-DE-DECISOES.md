@@ -1376,3 +1376,63 @@ Novo campo opcional `aiCategorization` dentro de `params`, fallback seguro
 
 Nenhum nesta versão — não altera `guessCategoryForTransaction` nem o
 resultado de nenhuma importação.
+
+## DEC-0032 — CI no GitHub Actions e golden master de migração
+
+Data: 2026-07-08
+
+### Contexto
+
+A pirâmide de testes de `docs/CLAUDE.md` (unitário → integração → E2E →
+CI) tinha a etapa de CI pendente desde a sessão de 2026-07-05: os testes
+(`npm test`, Vitest) só rodavam localmente, por decisão manual. Nada
+impedia um merge em `develop`/`main` com a suíte vermelha. Em paralelo,
+`migrationPipeline.js` (que evolui o formato interno dos dados de cada
+usuário no LocalStorage) só tinha dois smoke tests unitários — nada travava
+a **forma completa** do dado migrado de um usuário antigo real.
+
+### Decisão
+
+1. **CI**: adotar GitHub Actions (`.github/workflows/ci.yml`) rodando
+   `npm ci`, `npm test` e `npm run build` em push e pull request para
+   `main` e `develop`, em `ubuntu-latest` com Node 20.
+2. **Golden master de migração**: criar `tests/migrationGoldenMaster.test.js`
+   com um dataset antigo realista congelado e a saída exata esperada da
+   migração (`toEqual`). Qualquer passo de migração futuro que altere a
+   forma dos dados de um usuário existente quebra o golden e força uma
+   decisão consciente (atualizar o golden + registrar a razão), em vez de a
+   mudança passar silenciosa.
+
+### Alternativas avaliadas
+
+- **Node 24 na CI** (versão da máquina local do dev). Descartada em favor de
+  Node 20 LTS, mais estável e amplamente suportado em Actions; o projeto não
+  usa recurso exclusivo de Node 24. Reavaliar se surgir necessidade.
+- **Só ampliar os smoke tests unitários** em vez de um golden master
+  dedicado. Descartada: smoke tests pequenos não travam a forma completa do
+  dado; o valor do golden é justamente a regressão visível quando a
+  estrutura muda por inteiro.
+- **Rodar apenas testes na CI, sem build.** Descartada: o build já pegou
+  regressões de import/JSX no passado; mantê-lo na CI é barato.
+
+### Consequências positivas
+
+- Merge com suíte quebrada passa a ser visível/bloqueável no PR.
+- Regressão silenciosa no formato de dados migrados fica detectável.
+- Base pronta para adicionar E2E (Playwright) ao mesmo workflow depois.
+
+### Consequências negativas ou riscos
+
+- A CI só protege o que os testes cobrem — não substitui a validação manual
+  das regras financeiras.
+- O golden precisa ser atualizado conscientemente quando um passo de
+  migração legítimo mudar a saída; isso é intencional (é o ponto do teste),
+  mas exige disciplina para não "consertar" o golden sem pensar.
+
+### Impacto em LocalStorage
+
+Nenhum. Adição de infraestrutura de teste/CI, sem tocar dado persistido.
+
+### Impacto em regra de negócio
+
+Nenhum. Nenhuma RN alterada.

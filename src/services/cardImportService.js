@@ -174,6 +174,15 @@ export function isCardCreditRowBlocked(row = {}) {
   return false;
 }
 
+// Créditos classificados como "pagamento da fatura anterior" NÃO viram
+// lançamento: o pagamento já é registrado na conta corrente, e importá-lo no
+// cartão abateria a fatura em dobro. `confirmImport` os descarta. Este helper
+// centraliza a regra para que a prévia (Total selecionado / contador) e a
+// importação efetiva concordem, sem drift.
+export function isCardCreditDiscardedOnImport(row = {}) {
+  return isCardCreditRow(row) && row.creditoTipo === CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR;
+}
+
 export function resolveCardCreditCompetencia(row = {}, impCompetencia = null) {
   if (!isCardCreditRow(row)) return row.competencia || impCompetencia;
   if (CARD_CREDIT_TYPES_WITH_TARGET_COMPETENCE.includes(row.creditoTipo)) return row.creditoCompetencia || null;

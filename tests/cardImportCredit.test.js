@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   CARD_CREDIT_TYPES,
   classifyImportedCardCreditRows,
+  isCardCreditDiscardedOnImport,
   isCardCreditRowBlocked,
   resolveCardCreditCompetencia,
 } from "../src/services/cardImportService.js";
@@ -72,5 +73,21 @@ describe("resolveCardCreditCompetencia", () => {
 
   it("estorno/parcelamento_avista sem competência de destino retorna null (não cai para o lote)", () => {
     expect(resolveCardCreditCompetencia({ tipo: "receita", creditoTipo: CARD_CREDIT_TYPES.ESTORNO }, "2026-07")).toBeNull();
+  });
+});
+
+describe("isCardCreditDiscardedOnImport", () => {
+  it("descarta crédito classificado como pagamento da fatura anterior", () => {
+    expect(isCardCreditDiscardedOnImport({ tipo: "receita", creditoTipo: CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR })).toBe(true);
+  });
+
+  it("não descarta estorno nem reparcelamento à vista (viram lançamento)", () => {
+    expect(isCardCreditDiscardedOnImport({ tipo: "receita", creditoTipo: CARD_CREDIT_TYPES.ESTORNO })).toBe(false);
+    expect(isCardCreditDiscardedOnImport({ tipo: "receita", creditoTipo: CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA })).toBe(false);
+  });
+
+  it("não descarta despesa comum nem crédito ainda sem classificação", () => {
+    expect(isCardCreditDiscardedOnImport({ tipo: "despesa" })).toBe(false);
+    expect(isCardCreditDiscardedOnImport({ tipo: "receita" })).toBe(false);
   });
 });

@@ -15,14 +15,14 @@ import { buildProjectionInsights, buildRealCashFlowProjection } from "./services
 import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
 import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
-import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
+import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditDiscardedOnImport, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
 import { getOrphanDividas } from "./utils/dividaUtils.js";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.30.1";
+const APP_VERSION = "0.3.31.0";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -2979,8 +2979,8 @@ export default function App() {
       setImpTog(prev=>Object.fromEntries(impRows.map(r=>[r._id, Boolean(prev[r._id]) && !duplicateIds.has(r._id)])));
     }
     const ok=selectedRows.filter(r=>!duplicateIds.has(r._id));
-    const creditosDesconsiderados = impMode==="cartao" ? ok.filter(r=>r.creditoTipo===CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR) : [];
-    const okFinal = impMode==="cartao" ? ok.filter(r=>r.creditoTipo!==CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR) : ok;
+    const creditosDesconsiderados = impMode==="cartao" ? ok.filter(isCardCreditDiscardedOnImport) : [];
+    const okFinal = impMode==="cartao" ? ok.filter(r=>!isCardCreditDiscardedOnImport(r)) : ok;
     const importBatchId=`batch_${uid()}`;
     const duplicadas = impRows.filter(r=>duplicateIds.has(r._id));
     const desmarcadas = impRows.filter(r=>!impTog[r._id]&&!duplicateIds.has(r._id));
@@ -3036,6 +3036,14 @@ export default function App() {
       getCardInstallmentCorrectionPreview(trans, row._cardInstallmentCorrection),
     ]));
   }, [impMode, installmentDivergenceRows, trans]);
+
+  // Linhas selecionadas que de fato serão importadas. No modo cartão, créditos
+  // classificados como "pagamento da fatura anterior" são descartados no
+  // confirmImport; a prévia (Total selecionado e contador) deve refleti-lo.
+  const impSelectedForImport = useMemo(() => {
+    const selecionadas = impRows.filter(r => impTog[r._id]);
+    return impMode === "cartao" ? selecionadas.filter(r => !isCardCreditDiscardedOnImport(r)) : selecionadas;
+  }, [impRows, impTog, impMode]);
 
   const markInstallmentDivergenceAsKept = (row) => {
     if (!row?._id) return;
@@ -4284,8 +4292,8 @@ export default function App() {
                 )}
                 <div style={card()}>
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
-                    <div><div style={lbl}>Total selecionado</div><div style={{ fontSize:18, fontWeight:800, color:impRows.filter(r=>impTog[r._id]).reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0)>=0?C.emerald:C.coral }}>{fmtBRL(impRows.filter(r=>impTog[r._id]).reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0))}</div><div style={{ fontSize:11, color:C.soft }}>{Object.values(impTog).filter(Boolean).length} lançamentos → {impMode==="cartao"?(cards.find(c=>c.id===impCId)?.nome||"—"):(contas.find(c=>c.id===impContaId)?.nome||"—")}</div></div>
-                    <div style={{ display:"flex", gap:9 }}><button onClick={resetImport} style={btn(C.border)}>Cancelar</button><button onClick={confirmImport} style={btn(C.emerald)}>✓ Importar {Object.values(impTog).filter(Boolean).length}</button></div>
+                    <div><div style={lbl}>Total selecionado</div><div style={{ fontSize:18, fontWeight:800, color:impSelectedForImport.reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0)>=0?C.emerald:C.coral }}>{fmtBRL(impSelectedForImport.reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0))}</div><div style={{ fontSize:11, color:C.soft }}>{impSelectedForImport.length} lançamentos → {impMode==="cartao"?(cards.find(c=>c.id===impCId)?.nome||"—"):(contas.find(c=>c.id===impContaId)?.nome||"—")}</div></div>
+                    <div style={{ display:"flex", gap:9 }}><button onClick={resetImport} style={btn(C.border)}>Cancelar</button><button onClick={confirmImport} style={btn(C.emerald)}>✓ Importar {impSelectedForImport.length}</button></div>
                   </div>
                   {impErr&&<div style={{ color:C.coral, fontSize:12, marginTop:7 }}>⚠️ {impErr}</div>}
                 </div>

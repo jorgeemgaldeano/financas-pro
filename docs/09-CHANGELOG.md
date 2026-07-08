@@ -1244,3 +1244,77 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   (`R$ 11.893,21`), não relacionada a este bug — possivelmente um
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
+
+## [0.3.31.0] - 2026-07-08
+
+Versão de qualidade e limpeza técnica. Sem alteração de regra de negócio,
+sem campo novo e sem alteração de LocalStorage. Fecha itens do backlog
+"v0.3.31 — Qualidade e limpeza técnica" de `docs/07-ROADMAP-E-BACKLOG.md`.
+
+### Adicionado
+
+- **CI (GitHub Actions)**: novo workflow `.github/workflows/ci.yml` roda
+  `npm test` (Vitest) e `npm run build` a cada push e pull request em
+  `main` e `develop`. Trava regressões antes do merge, cumprindo a etapa
+  "CI com GitHub Actions" da pirâmide de testes de `docs/CLAUDE.md`. Item
+  pendente desde a sessão de 2026-07-05.
+- **Suíte golden master de migração**: novo
+  `tests/migrationGoldenMaster.test.js` (6 casos) congela um dataset antigo realista (campos PT/EN mistos,
+  conflitantes e já consistentes) e trava a saída exata de
+  `migrationPipeline.js`. Garante que qualquer passo de migração futuro que
+  altere silenciosamente a forma dos dados de um usuário existente quebre o
+  teste e force decisão consciente. Cobre também idempotência, pureza (não
+  muta a entrada), preservação de campos fora dos pares dual-write e
+  identidade referencial.
+- **Helper `isCardCreditDiscardedOnImport`** em
+  `src/services/cardImportService.js`: centraliza a regra de que créditos
+  classificados como "pagamento da fatura anterior" não viram lançamento.
+  Coberto por 3 casos em `tests/cardImportCredit.test.js`.
+
+### Corrigido
+
+- **"Total selecionado" da prévia de importação de cartão**
+  (`src/App.jsx`): o total e o contador da prévia somavam créditos
+  classificados como "pagamento da fatura anterior", que o `confirmImport`
+  descarta — o número previsto na prévia não batia com o que era de fato
+  importado. Agora a prévia usa `impSelectedForImport` (memo que exclui os
+  créditos descartados no modo cartão), e o `confirmImport` passou a usar o
+  mesmo helper `isCardCreditDiscardedOnImport`, eliminando o risco de drift
+  entre prévia e importação efetiva. Ajuste cosmético — nenhum dado
+  persistido estava incorreto.
+
+### Removido
+
+- **Diretório morto `src/src/`** (7 arquivos rastreados no Git: cópia
+  obsoleta de `App.jsx`, `constants/`, `hooks/`, `services/` e `utils/`).
+  Confirmado sem nenhum import apontando para ele (`main.jsx` importa
+  `./App.jsx`); gerava ruído em buscas/greps. Nenhuma funcionalidade
+  afetada.
+
+### Alterado
+
+- Versão visual da aplicação atualizada para `v0.3.31.0`.
+
+### Migração
+
+- Nenhuma. Nenhuma chave, prefixo, schema ou campo persistido foi alterado.
+
+### Testes
+
+- `npm test` (Vitest): **64/64 passando** (antes: 55/55; +6 golden master,
+  +3 do helper de crédito). `npm run build` aprovado (mantém o alerta
+  conhecido e não bloqueante de chunk > 500 kB, endereçado no backlog da
+  v0.3.33).
+- Smoke check no preview: app sobe sem erro de console, badge exibe
+  `v0.3.31.0`, aba Importar renderiza sem regressão. O fluxo completo do
+  fix de "Total selecionado" depende de arquivos OFX reais (locais,
+  ignorados pelo Git), então foi travado por teste unitário do helper em
+  vez de automação de UI.
+
+### Backlog não incluído nesta versão
+
+- Reatribuição assistida na exclusão (mover lançamentos antes de excluir),
+  candidata desde `DEC-0028`: **adiada deliberadamente**. O próprio backlog
+  condiciona a implementação a avaliar antes se o bloqueio simples atual
+  incomoda o usuário — é feature nova, não limpeza técnica. Fica para
+  decisão do usuário.

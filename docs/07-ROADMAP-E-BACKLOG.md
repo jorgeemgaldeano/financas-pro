@@ -865,27 +865,46 @@ pelo critério já registrado neste documento (evitar perda de dado,
 corrigir cálculo financeiro, preservar consistência de fatura/conta,
 reduzir risco técnico, facilitar evolução, melhorar UX).
 
-### v0.3.31 — Qualidade e limpeza técnica
+### v0.3.31 — Qualidade e limpeza técnica — ENTREGUE (2026-07-08)
 
-- [ ] Configurar CI (GitHub Actions) rodando `npx vitest run` a cada push/PR
-  — item já pendente desde a sessão de 2026-07-05, ainda não iniciado.
-- [ ] Criar suíte dedicada de migração com golden master (dado antigo real
-  → migração → validação), cobrindo `migrationPipeline.js`.
-- [ ] Remover `src/src/` — diretório duplicado e não utilizado (confirmado
-  nesta sessão: `main.jsx` importa `./App.jsx`, não `./src/App.jsx`;
-  arquivos ali são cópia obsoleta rastreada no Git, gerando confusão em
-  buscas/greps futuros).
+- [x] Configurar CI (GitHub Actions) rodando `npm test` a cada push/PR
+  — `.github/workflows/ci.yml`, roda Vitest + build em push/PR de
+  `main`/`develop`.
+- [x] Criar suíte dedicada de migração com golden master (dado antigo real
+  → migração → validação), cobrindo `migrationPipeline.js` —
+  `tests/migrationGoldenMaster.test.js` (6 casos).
+- [x] Remover `src/src/` — diretório duplicado e não utilizado (cópia
+  obsoleta rastreada no Git; nenhum import apontava para lá).
 - [ ] Avançar a reatribuição assistida por UI (mover lançamentos para
   outro cartão/conta/categoria antes de excluir), candidata desde
-  `DEC-0028` (v0.3.26.9) e ainda não implementada — avaliar se o usuário
-  sente falta do bloqueio simples atual antes de codificar.
-- [ ] Corrigir a inconsistência visual notada nesta sessão: o "Total
-  selecionado" na prévia de importação de cartão ainda soma créditos
-  classificados como "pagamento da fatura anterior" antes de confirmar,
-  mesmo esses sendo descartados no `confirmImport` — ajuste cosmético,
-  sem risco de dado incorreto persistido.
+  `DEC-0028` (v0.3.26.9) — **ADIADO deliberadamente**: é feature nova, não
+  limpeza técnica, e depende de avaliar antes se o bloqueio simples atual
+  incomoda o usuário. Aguarda decisão do usuário.
+- [x] Corrigir a inconsistência visual do "Total selecionado" na prévia de
+  importação de cartão (somava créditos "pagamento da fatura anterior"
+  descartados no `confirmImport`) — corrigido via memo `impSelectedForImport`
+  e helper compartilhado `isCardCreditDiscardedOnImport`.
 
-### v0.3.32 — Consolidação de UX (dialogs e feedback)
+### v0.3.32 — Reatribuição de lançamentos e consolidação de UX
+
+**Reatribuição (confirmado pelo usuário em 2026-07-08 como importante — desfaz
+o "ADIADO" do item 4 da v0.3.31):**
+
+- [ ] Permitir **mover lançamentos entre cartões** antes de excluir um cartão
+  em uso (hoje só há o bloqueio simples de `DEC-0028`). O usuário confirmou
+  que precisa reatribuir, não só ser bloqueado.
+- [ ] Permitir **mover lançamentos entre contas** de forma análoga.
+- [ ] Impacto a validar antes de codificar: mover lançamento de cartão altera
+  competência/fatura de destino (RN012/isolamento de fatura); mover entre
+  contas altera saldo das duas contas. Operação **atômica** obrigatória
+  (snapshot completo, padrão `cardInvoiceOperations.js`) — nunca escrita
+  parcial. Consultar `especialista-financas` e `arquiteto-operacoes-atomicas`.
+- [ ] **Recategorizar uma categoria por completo**: mover todos os
+  lançamentos de uma categoria para outra de uma vez (ex.: ao aposentar uma
+  categoria). Trocas pontuais por lançamento **já existem** e não fazem parte
+  deste item — aqui é a operação em massa por categoria.
+
+**Consolidação de UX (dialogs e feedback):**
 
 - [ ] Criar `ConfirmDialog` reutilizável substituindo os `window.confirm`/
   `alert` nativos espalhados pelo `App.jsx` — inclui os diálogos já
