@@ -1091,3 +1091,85 @@ fatura).
 Médio-alto: altera o valor total calculado da fatura para arquivos OFX do
 BB que contenham `TRNTYPE=CREDIT`/`PAYMENT`. Não altera cálculo de fatura
 para lançamentos manuais, CSV ou outros bancos.
+
+---
+
+## DEC-0028 — Bloquear exclusão de cartão/conta/categoria em uso (E3/L5)
+
+Data: 2026-07-07
+
+### Contexto
+
+Item de backlog E3/L5 (integridade referencial em exclusões), registrado em
+`docs/README-ENCERRAMENTO-SESSAO-2026-07-05.md` como parte da v0.3.29
+planejada. Numa auditoria anterior desta mesma sessão, a exclusão de
+**pessoa** (`delPessoa`) já foi confirmada correta (remove `dividas` e
+`despPess` em cascata). Esta rodada auditou **cartão**, **conta** e
+**categoria**, que são containers referenciados por lançamentos reais
+(dinheiro) — diferente de pessoa/dívida, onde a dívida não existe sem a
+pessoa.
+
+Auditoria encontrou: exclusão de cartão sem checar `trans`/`faturas`/
+`despPess`/`sims`; exclusão de conta **sem confirmação nenhuma** e sem checar
+`trans`/cartões vinculados (com efeito real — pagamento de fatura podia ser
+gravado numa conta fantasma sem erro visível, ver detalhe no changelog
+`[0.3.26.9]`); exclusão de categoria sem checar uso, e regra de
+autocategorização apontando para categoria excluída continuando a atribuir
+`catId` inválido a novas importações indefinidamente.
+
+### Decisão
+
+Bloquear a exclusão (em vez de cascata ou reatribuição assistida por UI)
+quando houver dependência real (lançamento/despesa compartilhada/fatura/
+simulação), mostrando ao usuário quantos registros de cada tipo estão
+vinculados. O usuário resolve manualmente (recategoriza/move/exclui os
+lançamentos) antes de conseguir excluir o container.
+
+Para dependências que são apenas **configuração órfã**, não lançamento real
+— `metas[catId]` e `params.autoCategoryRules` apontando para uma categoria
+que já foi confirmada sem uso — a limpeza é automática, sem exigir
+confirmação extra do usuário.
+
+### Alternativas avaliadas
+
+- Cascata (excluir os lançamentos junto com o cartão/conta/categoria).
+  Descartada: perde histórico financeiro real, incompatível com a regra
+  geral do projeto de não perder dado sem intenção explícita do usuário.
+- Reatribuição assistida (seletor no próprio diálogo de exclusão para mover
+  lançamentos para outro cartão/conta/categoria antes de excluir). Adiada
+  para uma v0.3.29.1 futura, se o usuário sentir falta depois de usar o
+  bloqueio simples — exigiria um componente de UI novo, fora do escopo desta
+  correção pontual de integridade referencial.
+
+### Consequências positivas
+
+- Nenhuma perda de dado financeiro real por exclusão acidental de
+  cartão/conta/categoria em uso.
+- Fecha o vetor de bug ativo da regra de autocategorização órfã (`catId`
+  inválido sendo atribuído a cada nova importação que bate com a regra).
+- Conta ganhou confirmação que não existia antes.
+
+### Consequências negativas ou riscos
+
+- Usuário com muitos lançamentos num cartão/conta/categoria que realmente
+  quer excluir vai precisar recategorizar/mover cada um manualmente nesta
+  primeira versão (sem reatribuição assistida).
+- `cardDependents`/`contaDependents`/`delCat` continuam como closures
+  internas de `App.jsx` (mesmo padrão pré-existente), não testáveis via
+  Vitest no ambiente atual (`environment: "node"`, sem plugin React) —
+  validação desta versão foi feita via E2E manual no preview, não por teste
+  automatizado.
+
+### Impacto em LocalStorage
+
+Nenhuma alteração de chave ou estrutura. `metas` e `params.autoCategoryRules`
+continuam com o mesmo formato — a mudança é que entradas órfãs são removidas
+no momento da exclusão da categoria, em vez de ficarem acumulando
+indefinidamente.
+
+### Impacto em regra de negócio
+
+Médio: exclusões que antes eram sempre permitidas (com ou sem confirmação,
+dependendo do caso) agora podem ser bloqueadas quando há uso real. Nenhum
+cálculo financeiro existente muda — só a possibilidade de excluir um
+container que já está em uso.

@@ -21,7 +21,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.26.8";
+const APP_VERSION = "0.3.26.9";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -512,6 +512,21 @@ function findRootCat(cats, id) {
 function catColor(cats, id) { return findRootCat(cats,id)?.cor||"#B0BEC5"; }
 function catIcon(cats, id)  { return findRootCat(cats,id)?.icon||"📦"; }
 function catLabel(cats, id) { return flattenCats(cats).find(f=>f.id===id)?.path||id; }
+function collectCatAndDescendantIds(cats, id) {
+  const ids = new Set();
+  const collect = (list) => {
+    for (const c of list) {
+      if (c.id === id) {
+        const addAll = (node) => { ids.add(node.id); (node.subs||[]).forEach(addAll); };
+        addAll(c);
+      } else if (c.subs?.length) {
+        collect(c.subs);
+      }
+    }
+  };
+  collect(cats);
+  return ids;
+}
 
 // ── Charts
 function BarChart({ data, color=C.emerald, height=80 }) {
@@ -1642,7 +1657,7 @@ function MetaInput({ catId, metas, setMetas, compact=false }) {
   );
 }
 
-function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, onExport, onImport, onReset }) {
+function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, onExport, onImport, onReset }) {
   const [section, setSection] = useState("cats");
   const [paramsBuf, setParamsBuf] = useState({...params});
   const [newCat, setNewCat] = useState({ nome:"", cor:"#B0BEC5", icon:"📦" });
@@ -1810,7 +1825,16 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                   </div>
                   <div style={{ display:"flex", gap:8 }}>
                     <button onClick={()=>setEditCardId(null)} style={btn2(C.emerald,{ flex:1 })}>✓ Salvar</button>
-                    <button onClick={()=>{ if(window.confirm("Excluir cartão?")){ setCards(p=>p.filter(x=>x.id!==c.id)); setEditCardId(null); }}} style={btn2(C.coral,{ flex:1 })}>Excluir</button>
+                    <button onClick={()=>{
+                      const dep = cardDependents(c.id);
+                      const parts = [];
+                      if (dep.lanc) parts.push(`${dep.lanc} lançamento(s)`);
+                      if (dep.fat) parts.push(`${dep.fat} fatura(s)`);
+                      if (dep.comp) parts.push(`${dep.comp} despesa(s) compartilhada(s)`);
+                      if (dep.sim) parts.push(`${dep.sim} simulação(ões)`);
+                      if (parts.length) { alert(`Não é possível excluir. Existem ${parts.join(", ")} vinculados a este cartão. Transfira ou remova esses registros antes de excluir.`); return; }
+                      if(window.confirm("Excluir cartão?")){ setCards(p=>p.filter(x=>x.id!==c.id)); setEditCardId(null); }
+                    }} style={btn2(C.coral,{ flex:1 })}>Excluir</button>
                   </div>
                 </div>
               ):(
@@ -1908,7 +1932,16 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                       <div style={{ fontSize:11, color:C.soft }}>{ct.tipo==="corrente"?"Conta Corrente":ct.tipo==="vale_alimentacao"?"Vale Alimentação":"Vale Refeição"}</div>
                     </div>
                   </div>
-                  <button onClick={()=>contas.length>1&&setContas(p=>p.filter(c=>c.id!==ct.id))} style={{ background:C.coral+"22", border:"none", borderRadius:5, color:C.coral, padding:"4px 9px", cursor:"pointer", fontSize:12 }}>Remover</button>
+                  <button onClick={()=>{
+                    if(contas.length<=1) return;
+                    const dep = contaDependents(ct.id);
+                    const parts = [];
+                    if (dep.lanc) parts.push(`${dep.lanc} lançamento(s)`);
+                    if (dep.cartoesVinc) parts.push(`${dep.cartoesVinc} cartão(ões) vinculado(s)`);
+                    if (dep.fat) parts.push(`${dep.fat} fatura(s)`);
+                    if (parts.length) { alert(`Não é possível excluir. Existem ${parts.join(", ")} usando esta conta. Transfira ou remova esses registros antes de excluir.`); return; }
+                    if(window.confirm("Excluir conta?")) setContas(p=>p.filter(c=>c.id!==ct.id));
+                  }} style={{ background:C.coral+"22", border:"none", borderRadius:5, color:C.coral, padding:"4px 9px", cursor:"pointer", fontSize:12 }}>Remover</button>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   <span style={{ fontSize:12, color:C.soft, flexShrink:0 }}>Saldo inicial do mês (R$):</span>
@@ -2729,9 +2762,33 @@ export default function App() {
   // Category CRUD
   const addRootCat=(nome,cor,icon)=>setCats(p=>[...p,{ id:"cat"+uid(), nome, cor:cor||"#B0BEC5", icon:icon||"📦", subs:[] }]);
   const addSubCat=(parentId,nome)=>{ const ins=(list)=>list.map(c=>c.id===parentId?{ ...c, subs:[...(c.subs||[]),{ id:"sub"+uid(), nome, subs:[] }] }:{ ...c, subs:ins(c.subs||[]) }); setCats(ins); };
-  const delCat=(id)=>{ const rem=(list)=>list.filter(c=>c.id!==id).map(c=>({ ...c, subs:rem(c.subs||[]) })); setCats(rem); };
+  const delCat=(id)=>{
+    const ids = collectCatAndDescendantIds(cats, id);
+    const emUso = trans.filter(t=>ids.has(t.catId)).length + despPess.filter(d=>ids.has(d.catId)).length;
+    if (emUso > 0) {
+      alert(`Não é possível excluir. Existem ${emUso} lançamento(s)/despesa(s) usando esta categoria ou suas subcategorias. Recategorize-os antes de excluir.`);
+      return;
+    }
+    const rem=(list)=>list.filter(c=>c.id!==id).map(c=>({ ...c, subs:rem(c.subs||[]) }));
+    setCats(rem);
+    setMetas(prev => { const next = {...prev}; ids.forEach(cid=>delete next[cid]); return next; });
+    setParams(prev => ({ ...prev, autoCategoryRules: (Array.isArray(prev.autoCategoryRules)?prev.autoCategoryRules:[]).filter(r=>!ids.has(r.catId)) }));
+  };
   const renameCat=(id,nome)=>{ const upd=(list)=>list.map(c=>c.id===id?{ ...c,nome }:{ ...c, subs:upd(c.subs||[]) }); setCats(upd); };
   const recolorCat=(id,cor)=>setCats(p=>p.map(c=>c.id===id?{ ...c,cor }:c));
+
+  // Referential-integrity checks used to block exclusão de cartão/conta em uso (E3/L5)
+  const cardDependents = (cardId) => ({
+    lanc: trans.filter(t=>t.cartaoId===cardId).length,
+    fat: faturas.filter(f=>f.cardId===cardId).length,
+    comp: despPess.filter(d=>d.cartaoId===cardId).length,
+    sim: sims.filter(s=>s.cartaoId===cardId).length,
+  });
+  const contaDependents = (contaId) => ({
+    lanc: trans.filter(t=>t.contaId===contaId).length,
+    cartoesVinc: cards.filter(cd=>getCardPaymentAccountId(cd)===contaId).length,
+    fat: faturas.filter(f=>f.accountId===contaId||f.contaPagamentoId===contaId).length,
+  });
 
   // Import
   const categorizeImportRow=(desc,tipo="despesa")=>guessCategoryForTransaction({
@@ -4176,7 +4233,7 @@ export default function App() {
         )}
 
         {/* PARÂMETROS */}
-        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} onExport={handleExport} onImport={handleImport} onReset={handleReset}/>}
+        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} onExport={handleExport} onImport={handleImport} onReset={handleReset}/>}
 
         </div>
       </div>
