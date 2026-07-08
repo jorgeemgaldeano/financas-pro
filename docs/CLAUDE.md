@@ -1,230 +1,133 @@
 # CLAUDE.md — Finanças PRO
 
-Este arquivo é lido automaticamente pelo Claude Code no início de cada sessão.
-Ele resume a governança do projeto. Os documentos numerados na raiz (`00` a
-`10+`) são a fonte completa — consulte-os quando precisar de detalhe que não
-está aqui, especialmente antes de decisões de arquitetura, modelo de dados ou
-produto.
-
-Todo o projeto é conduzido em **português do Brasil**: comentários, commits,
-nomes de branch quando fizer sentido, e toda a comunicação com o usuário.
+> Este arquivo é a **memória de projeto** do Claude Code. Ele é lido automaticamente
+> em toda sessão e tem prioridade sobre suposições. A referência-mãe conceitual
+> continua sendo `00-MINDMAP-GOVERNANCA.md`; este arquivo é a versão operacional dela
+> para o Claude Code.
 
 ---
 
-## 1. O que é o projeto
+## Idioma
 
-Finanças PRO é um aplicativo de gestão financeira pessoal:
-
-- **Stack**: React + Vite, sem backend — persistência 100% em `LocalStorage`
-  do navegador.
-- **Desenvolvedor**: Jorge, sozinho, atuando como product owner. O Claude
-  Code atua como arquiteto de software, dev React sênior, revisor de código,
-  UX designer e especialista em finanças pessoais — todos os papéis ao
-  mesmo tempo (ver `00-MINDMAP-GOVERNANCA.md`).
-- **Versão atual da base de código**: linha `v0.3.28` (consolidação do
-  modelo de dados). Backlog planejado até `v0.3.33+` em
-  `07-ROADMAP-E-BACKLOG.md`.
-
-### Funcionalidades existentes (não remover sem decisão explícita)
-Dashboard, Lançamentos, Cartões, Contas, Categorias hierárquicas, Metas,
-Projeções, Simulações, Importação OFX/CSV, Backup e restauração, Parâmetros,
-Pessoas, Dívidas, Despesas compartilhadas.
+**Toda a interação, código, comentários e documentação são em Português do Brasil (PT-BR).**
+Nomes de variáveis/funções podem seguir o padrão já existente no arquivo em edição.
 
 ---
 
-## 2. Regras não negociáveis
+## O que é o projeto
 
-Estas regras vêm de `00-MINDMAP-GOVERNANCA.md` e de decisões já tomadas
-(`08-REGISTRO-DE-DECISOES.md`) depois de bugs reais em produção. Não violar
-sem alinhar com o Jorge antes:
+Finanças PRO é um aplicativo de **gestão financeira pessoal**, **local-first**,
+construído em **React + Vite**, cujo **único mecanismo de persistência é o
+LocalStorage do navegador** (não há backend). Desenvolvimento iterativo, versionado,
+com documentação rastreável.
 
-1. **Não remover funcionalidade existente.**
-2. **Não quebrar comportamento existente** sem justificar e documentar.
-3. **Não alterar LocalStorage sem migração** — nunca mude o formato de uma
-   chave persistida sem passar pelo `migrationPipeline.js` e sem atualizar
-   `04-MODELO-DE-DADOS-E-LOCALSTORAGE.md`.
-4. **PT é o campo canônico.** O modelo tem pares PT/EN (`valor`/`amount`,
-   etc.) por herança histórica. Em caso de conflito, o valor em português
-   vence. A normalização acontece em `transactionNormalizer.js`.
-5. **Reutilizar antes de criar** (DEC-0009): antes de qualquer código novo,
-   verificar (a) se já existe solução no projeto, (b) se React nativo
-   resolve, (c) se há biblioteca compatível já em uso, e só então (d)
-   escrever código próprio. Não adicionar Redux/Zustand ou dependências
-   pesadas sem justificativa explícita.
-6. **Sempre avaliar o impacto antes de codificar** — em especial impacto em
-   LocalStorage e em regra de negócio financeira.
-7. **Operações de estado devem ser atômicas.** Não fazer múltiplos
-   `setState`/gravações separadas quando uma operação lógica única está em
-   jogo (motivo da criação de `cardInvoiceOperations.js` — evita commits
-   parciais).
+Versão atual: faixa **v0.3.x**.
 
 ---
 
-## 3. Estrutura do projeto
+## Regras gerais (inegociáveis)
 
-O `App.jsx` já foi grande (chegou a 4.500+ linhas) e está em modularização
-incremental e de baixo risco — ver `03-ARQUITETURA-E-MODULARIZACAO.md` para
-o plano de fases completo. Estado atual dos módulos já extraídos:
+Estas regras vêm do mindmap de governança e valem para **qualquer** mudança:
+
+1. **Não remover funcionalidades existentes.**
+2. **Não quebrar comportamento existente.**
+3. **Não alterar regras de negócio sem explicar** o impacto antes.
+4. **Não alterar o LocalStorage sem migração** (estrutura, chave, prefixo ou schema).
+5. **Sempre avaliar impacto antes de codificar** — analisar, depois propor, depois implementar.
+
+Quando uma tarefa colidir com qualquer uma dessas regras, **pare e reporte** em vez de
+seguir. Preferir uma pergunta a uma suposição destrutiva.
+
+---
+
+## Estrutura de pastas (src/)
 
 ```
 src/
-  App.jsx                        # ainda concentra bastante lógica; extração incremental em andamento
-  main.jsx
-  styles.css
-
-  constants/
-    storageKeys.js                # LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS
-
-  services/
-    financeRepository.js
-    cardInvoiceService.js
-    cardInvoiceOperations.js      # operações atômicas de fatura (v0.3.27)
-    cardImportService.js
-    cardInstallmentService.js
-    importService.js
-    categoryService.js
-    projectionService.js
-    transactionNormalizer.js      # canonicalização PT/EN (v0.3.28)
-    migrationPipeline.js          # pipeline formal de migração (v0.3.28)
-
-  hooks/
-    useLocalStorage.js
-    useTransactionsStorage.js     # (v0.3.28)
-
-  utils/
-    dateUtils.js
-    moneyUtils.js
-
-  components/
-    CashFlowChart.jsx
-    TransactionFiltersPanel.jsx
-    CardInstallmentDivergencePanel.jsx
-    DateInput.jsx
-    RequiredFieldModal.jsx
-
-tests/
-    cardInvoiceOperations.test.js  # 17 testes (v0.3.27)
-    dataModel.test.js              # 16 testes (v0.3.28)
+  constants/    → storageKeys.js (LS_PREFIX, LS_VERSION, BACKUP_SCHEMA_VERSION, chaves)
+  services/     → lógica pura e I/O: financeRepository, cardInvoiceService,
+                  importService, categoryService, projectionService,
+                  cardImportService, cardInstallmentService,
+                  transactionNormalizer, migrationPipeline, cardInvoiceOperations
+  hooks/        → useLocalStorage (useLS), useTransactionsStorage
+  utils/        → dateUtils, moneyUtils
+  components/   → App.jsx e componentes de UI (.jsx)
 ```
 
-Extrações candidatas para as próximas versões (ver
-`03-ARQUITETURA-E-MODULARIZACAO.md`, seção "Pontos candidatos à próxima
-extração"): `simulationService.js`, `peopleSharedService.js`,
-`backupService.js` dedicado. Só extrair `backupService.js` depois que a
-regra atual de backup/restauração estiver validada manualmente.
-
-Ao criar componente novo: nome claro, responsabilidade única, props
-explícitas, sem acesso direto a LocalStorage (salvo hook técnico), sem
-cálculo financeiro complexo dentro do JSX.
+> `App.jsx` já foi grande demais (4.500+ linhas). **Preferir extração** de serviços,
+> hooks e utils a fazê-lo crescer. Modularização > crescimento monolítico.
 
 ---
 
-## 4. Modelo de dados e LocalStorage
+## Invariantes técnicas (aprendidas com bugs reais)
 
-Chaves de LocalStorage (prefixadas por `LS_PREFIX = "fpro_v" + LS_VERSION +
-"_"`, hoje `LS_VERSION = 1`):
+Estas invariantes custaram bugs de produção. Violá-las é regressão:
 
-```
-trans, contas, metas, pessoas, dividas, despPess, cards, cats, params,
-saldosIniciais, faturas, simulacoes
-```
-
-`BACKUP_SCHEMA_VERSION = 2`. Qualquer mudança estrutural em uma dessas
-chaves exige:
-
-1. Entrada no `migrationPipeline.js`.
-2. Atualização de `04-MODELO-DE-DADOS-E-LOCALSTORAGE.md`.
-3. Teste de caracterização cobrindo dado antigo sendo lido pela versão nova.
-4. Verificação de que backup/restauração continua compatível com backups
-   antigos (preenchimento seguro de campos ausentes).
-
-Bugs reais já causados por descuido aqui (não repetir): bump de versão
-destruindo dados silenciosamente, `toISOString()` gerando bug de fuso
-horário em inicialização de mês, escrita dupla de campos PT/EN sem fonte
-canônica, falha silenciosa de persistência ao estourar quota do
-LocalStorage.
+- **PT é canônico.** Onde existirem pares de campo PT/EN, a **fonte de verdade é PT**,
+  resolvida no `transactionNormalizer.js`, na fronteira de persistência.
+  Nunca reintroduzir *dual-write* PT/EN sem canonicalização.
+- **Operações atômicas.** Nunca dividir escritas de estado relacionadas
+  (ex.: `setTrans` + `setFaturas` separados) — isso arrisca *commit* parcial.
+  Usar serviços puros que retornam o **snapshot completo** (padrão de
+  `cardInvoiceOperations.js`) e aplicar o resultado de uma vez.
+- **LocalStorage é frágil — tratar como cidadão de primeira classe:**
+  - O versionamento vive no **prefixo da chave** (`LS_PREFIX = "fpro_v" + LS_VERSION`).
+    Bumpar `LS_VERSION` **troca o namespace inteiro** e pode ocultar/destruir dados —
+    só fazer com migração explícita.
+  - `set()` pode falhar por **cota excedida**; ele retorna `false`. Nunca assumir sucesso silencioso.
+  - Persistência que falha **não pode falhar em silêncio** — o usuário precisa de feedback.
+- **Datas:** usar **componentes de data locais**, nunca `toISOString()` (UTC) para
+  inicializar mês/competência — isso já causou bug de fuso.
+- **Migração:** mudança de estrutura de dados persistidos passa **obrigatoriamente**
+  pelo `migrationPipeline.js`, preenchendo campos novos com padrões seguros para dados antigos (RN002).
 
 ---
 
-## 5. Fluxo de trabalho esperado
+## Regras de negócio
 
-### Antes de codificar
-- Ler o(s) doc(s) numerado(s) relevante(s) ao escopo (`02-REGRAS-DE-NEGOCIO.md`
-  para regra financeira, `04-MODELO-DE-DADOS-E-LOCALSTORAGE.md` para
-  persistência, `07-ROADMAP-E-BACKLOG.md` para saber se já há decisão
-  registrada sobre o item).
-- Confirmar branch (`git status`, `git branch`) — o fluxo usa `develop` como
-  branch de trabalho e `main` como branch estável, com tags por versão
-  (ex.: `v0.3.28-base`). Ver exemplos completos em
-  `ROTEIRO-GIT-POS-v0_3_26_6.md` e `GUIA-DE-ATUALIZACAO-v0_3_28.md`.
-- Para mudanças que tocam modelo de dados, fatura de cartão, migração ou
-  qualquer área já marcada como frágil: propor um plano antes de editar
-  (modo de planejamento), não editar direto.
-
-### Durante
-- Preferir funções puras e pequenas, baixo acoplamento, nomes claros.
-- Usar `useMemo`/`useCallback` quando evitar recomputação ou
-  re-renderização desnecessária.
-- Escrever teste de caracterização para comportamento existente antes de
-  refatorar uma área crítica (padrão já usado em `cardInvoiceOperations.js`
-  e `dataModel.test.js`).
-
-### Depois de qualquer alteração
-```bash
-npx vitest run        # todos os testes devem passar (33 até v0.3.28, crescendo)
-npm run build
-npm run dev            # checklist manual quando a mudança afeta UI ou fluxo de dados
-```
-- Atualizar `09-CHANGELOG.md` seguindo o modelo já usado no arquivo
-  (Adicionado / Alterado / Corrigido / Removido / Migração / Testes).
-- Se a mudança envolveu uma decisão técnica relevante (trade-off, alternativa
-  descartada, impacto em LocalStorage ou regra de negócio), registrar em
-  `08-REGISTRO-DE-DECISOES.md` no mesmo formato dos `DEC-000X` existentes.
-- Se a versão fechar um marco, considerar um guia de atualização dedicado
-  (padrão `GUIA-DE-ATUALIZACAO-vX_Y_Z.md`) com passo a passo de branch,
-  cópia de arquivos, testes, build, checklist manual e commit/merge.
+As regras vivem em `02-REGRAS-DE-NEGOCIO.md`, numeradas como **RN001, RN002, ...**.
+Ao mexer em fatura, parcelamento, saldo mensal, projeção, despesa compartilhada, etc.,
+**citar a RN afetada** e não alterar seu comportamento sem sinalizar (regra geral 3).
 
 ---
 
-## 6. Comandos do projeto
+## Testes
 
-```bash
-npm install
-npm run dev        # desenvolvimento local
-npm run build       # build de produção
-npm run preview     # preview do build
-npx vitest run       # suíte de testes (characterization tests)
-```
-
-Build já teve alerta não bloqueante de chunk >500kB (área de
-importação/PDF) — não é regressão, é um item de backlog para code splitting.
+- **Escrever testes de caracterização ANTES** de refatorar (travar o comportamento atual).
+- Pirâmide completa: unitário → integração → **E2E com Playwright** → **CI com GitHub Actions**.
+- Todo refactor ou nova feature acompanha teste. Contagem cumulativa é rastreada nos docs.
 
 ---
 
-## 7. Qualidade, performance e UX (resumo)
+## Convenção de documentação
 
-- Código legível, funções pequenas, evitar duplicação e código morto.
-- Evitar cálculos repetidos e estados duplicados.
-- UX: simplicidade, poucos cliques, feedback visual, responsividade,
-  filtros e busca, ações rápidas.
-- Interface: manter padrão visual atual, cores consistentes, layout limpo,
-  evitar poluição visual — não redesenhar sem pedido explícito.
-
----
-
-## 8. Evoluções futuras conhecidas (contexto, não fazer sem pedido)
-
-Calendário financeiro, fluxo de caixa, orçamentos, patrimônio,
-investimentos, importação automática, Open Finance, PWA, sincronização em
-nuvem. Ver detalhamento e priorização em `07-ROADMAP-E-BACKLOG.md`.
+- Documentos numerados sequencialmente (`01-...`, `02-...`, ... já na casa dos 35+).
+- Todo entregável relevante gera/atualiza: entrada no **`09-CHANGELOG.md`**,
+  registro em **`08-REGISTRO-DE-DECISOES.md`** (estilo ADR) quando houver decisão,
+  guia de atualização e roteiro Git.
+- **Mudanças cirúrgicas e rastreáveis:** acompanhar de *diffs* legíveis para auditoria.
 
 ---
 
-## 9. Retomada de sessão
+## Fluxo de trabalho esperado (padrão de escalonamento do Jorge)
 
-Ao iniciar uma sessão nova sem contexto recente, procurar o arquivo de
-retomada mais recente no padrão `NN-RETOMADA-AAAA-MM-DD-POS-vX_Y_Z.md` (ex.:
-`35-RETOMADA-2026-07-05-POS-v0_3_26_6.md`) — ele traz o último status
-aprovado, o que entra/não entra no próximo escopo, e checklist inicial. Se
-uma sessão fechar um marco importante, criar o próximo arquivo de retomada
-seguindo o mesmo padrão antes de encerrar.
+1. **Análise** de impacto (sem tocar código ainda).
+2. **Proposta** com opções e trade-offs.
+3. **Implementação** cirúrgica + testes + *diffs*.
+4. **Empacotamento**: `src/` estruturado, notas técnicas, guia de atualização, roteiro Git.
+
+---
+
+## Subagentes disponíveis (`.claude/agents/`)
+
+Delegar proativamente conforme a tarefa:
+
+| Agente | Quando usar |
+|---|---|
+| `guardiao-localstorage` | Qualquer mudança em `storageKeys`, persistência, migração, schema ou backup. |
+| `normalizador-dados` | Modelo de dados, campos PT/EN, normalização, drift de fonte de verdade. |
+| `arquiteto-operacoes-atomicas` | Escritas de estado, serviços puros, extração de módulos, acoplamento. |
+| `engenheiro-testes` | Escrever/rodar testes, caracterização antes de refactor, E2E, CI. |
+| `especialista-financas` | Validar regras RN### (fatura, parcelas, saldos, projeções, despesas compartilhadas). |
+| `revisor-ux` | Consistência visual, cliques, responsividade, componentes reutilizáveis. |
+| `escriba-documentacao` | Changelog, registro de decisões, docs numeradas, guia de atualização, roteiro Git. |
