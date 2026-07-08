@@ -850,3 +850,103 @@ v0.3.27 — Isolamento de fatura de cartão
 
 - [ ] Validar manualmente o painel de divergências com caso real de fatura subsequente.
 - [ ] Após aprovação, avançar para isolamento da fatura de cartão.
+
+---
+
+## Backlog planejado — pós v0.3.30.0 (próximas 5 versões)
+
+Data: 2026-07-08
+
+Contexto: `v0.3.30.0` entregou correção da dívida órfã (aba Pessoas),
+classificação manual de créditos de cartão na importação (validada com
+faturas reais do BB) e o scaffold de sugestão de categoria por IA (sem
+chamada real ainda). Este bloco organiza o que vem a seguir, priorizado
+pelo critério já registrado neste documento (evitar perda de dado,
+corrigir cálculo financeiro, preservar consistência de fatura/conta,
+reduzir risco técnico, facilitar evolução, melhorar UX).
+
+### v0.3.31 — Qualidade e limpeza técnica
+
+- [ ] Configurar CI (GitHub Actions) rodando `npx vitest run` a cada push/PR
+  — item já pendente desde a sessão de 2026-07-05, ainda não iniciado.
+- [ ] Criar suíte dedicada de migração com golden master (dado antigo real
+  → migração → validação), cobrindo `migrationPipeline.js`.
+- [ ] Remover `src/src/` — diretório duplicado e não utilizado (confirmado
+  nesta sessão: `main.jsx` importa `./App.jsx`, não `./src/App.jsx`;
+  arquivos ali são cópia obsoleta rastreada no Git, gerando confusão em
+  buscas/greps futuros).
+- [ ] Avançar a reatribuição assistida por UI (mover lançamentos para
+  outro cartão/conta/categoria antes de excluir), candidata desde
+  `DEC-0028` (v0.3.26.9) e ainda não implementada — avaliar se o usuário
+  sente falta do bloqueio simples atual antes de codificar.
+- [ ] Corrigir a inconsistência visual notada nesta sessão: o "Total
+  selecionado" na prévia de importação de cartão ainda soma créditos
+  classificados como "pagamento da fatura anterior" antes de confirmar,
+  mesmo esses sendo descartados no `confirmImport` — ajuste cosmético,
+  sem risco de dado incorreto persistido.
+
+### v0.3.32 — Consolidação de UX (dialogs e feedback)
+
+- [ ] Criar `ConfirmDialog` reutilizável substituindo os `window.confirm`/
+  `alert` nativos espalhados pelo `App.jsx` — inclui os diálogos já
+  existentes (`delPessoa`, `delDivida`, `delCat`, bloqueios de exclusão de
+  cartão/conta/categoria) e os novos desta sessão (exclusão de dívida
+  órfã, confirmações da importação de cartão).
+- [ ] Criar toast com undo para substituir feedback silencioso em ações
+  destrutivas (exclusão de dívida, desfazer lote importado).
+- [ ] Revisar textos de ajuda da classificação de crédito de cartão com
+  base em mais casos reais, se o usuário fornecer novos arquivos de
+  teste — o rótulo "Estorno de juros" já foi ajustado nesta sessão a
+  partir de um caso real; pode haver outras variações (ex. estorno de
+  produto) que mereçam um texto próprio.
+
+### v0.3.33 — Performance e cálculo
+
+- [ ] Corrigir a complexidade quadrática do cálculo de saldo (item E4, já
+  mapeado desde a sessão de 2026-07-05) — centralizar em função memoizada
+  reaproveitável por Dashboard, Contas e Projeções (RN021).
+- [ ] Reduzir o alerta de build de chunk > 500 kB (hoje só documentado
+  como não bloqueante) via code splitting — candidato principal é o
+  parser de PDF (`pdfjs-dist`), usado só na importação de vale Pluxee e
+  carregável sob demanda (`import()` dinâmico).
+- [ ] Auditar recomputações desnecessárias em Projeções/Dashboard
+  (`useMemo`/`useCallback` já usados em parte, mas não auditados
+  sistematicamente).
+
+### v0.3.34 — Importação avançada
+
+- [ ] Permitir classificar em lote linhas de crédito semelhantes na
+  prévia de importação (ex.: aplicar a mesma classificação a todas as
+  linhas com descrição parecida), reduzindo cliques quando a fatura tiver
+  vários créditos do mesmo tipo.
+- [ ] Avaliar suporte a formatos de OFX de outras administradoras além do
+  BB para a classificação de crédito (hoje testada só com arquivos reais
+  do BB) — Nubank e Itaú podem usar `TRNTYPE`/convenções diferentes.
+- [ ] **Decisão pendente com o usuário antes de codificar**: escolher
+  provedor de IA (OpenAI, Anthropic, outro) e onde guardar a chave, para
+  então implementar a chamada real em `aiCategorizationService.js`
+  (hoje só scaffold, ver `DEC-0031`). Não iniciar sem essa decisão.
+
+### v0.3.35 — Modularização estrutural
+
+- [ ] Extrair `simulationService.js` (cálculo de simulações hoje dentro
+  de `App.jsx`).
+- [ ] Extrair `peopleSharedService.js` (regras de despesas compartilhadas
+  e dívidas de `PessoasTab`).
+- [ ] Criar `backupService.js` dedicado, saindo do `App.jsx` — só depois
+  que a rotina atual de backup/restauração estiver validada
+  manualmente mais uma vez (critério já registrado em `DEC-0008`).
+- [ ] Retomar a revisão conceitual da aba Projeções (fluxo de caixa real
+  vs. estimativa) mapeada na sessão de 2026-06-29, ainda não concluída.
+
+### Backlog aberto (sem versão agendada, baixa prioridade)
+
+- [ ] Exportação CSV além de TXT para despesas de cartão.
+- [ ] Relatório por pessoa em formato exportável.
+- [ ] Gráficos de evolução por pessoa e de impacto de simulações.
+- [ ] Suporte a arquivos Pluxee com carteira Alimentação e com mais de um
+  ano no mesmo PDF; avaliar PDFs sem texto pesquisável.
+- [ ] Avaliar suporte a outros fornecedores de vale-benefício além da
+  Pluxee.
+- [ ] Testes de integração leves com `@testing-library/react`.
+- [ ] Smoke test E2E (Playwright) cobrindo o checklist de fatura.
