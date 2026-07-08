@@ -163,6 +163,18 @@ const CARD_CREDIT_TYPES_WITH_TARGET_COMPETENCE = [
   CARD_CREDIT_TYPES.ESTORNO,
 ];
 
+// v0.3.32.1 — Sugere o tipo do crédito pelo texto do lançamento (memos do BB
+// são reconhecíveis). É apenas uma PRÉ-sugestão: o usuário revê e pode trocar
+// na prévia. A ordem importa — "DEVOLUCAO JUROS PAGAMENTO TITULO" contém
+// "PAGAMENTO", então o teste de devolução/estorno vem antes do de pagamento.
+export function suggestCardCreditType(descricao = "") {
+  const s = String(descricao || "").toLowerCase();
+  if (/devolu|estorn/.test(s)) return CARD_CREDIT_TYPES.ESTORNO;
+  if (/#pcv|parc\.?\s*comp\.?\s*vist|reparcel/.test(s)) return CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA;
+  if (/\bpgto\b|\bpagto\b|pagamento\s+de?\s*fatura|pgto\.?\s*cash/.test(s)) return CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR;
+  return null;
+}
+
 export function isCardCreditRow(row = {}) {
   return row.tipo === "receita";
 }
@@ -189,19 +201,27 @@ export function resolveCardCreditCompetencia(row = {}, impCompetencia = null) {
   return row.competencia || impCompetencia;
 }
 
-export function classifyImportedCardCreditRows(rows = []) {
+export function classifyImportedCardCreditRows(rows = [], { defaultCompetencia = null } = {}) {
   return (rows || []).map(row => {
     if (!isCardCreditRow(row)) return row;
-    return {
+    // Pré-sugere o tipo pelo memo (editável na prévia) e, para os tipos que
+    // dependem de competência de destino, adota a competência da importação
+    // por padrão — o crédito aparece nessa fatura, então abate-a por padrão.
+    const creditoTipo = row.creditoTipo || suggestCardCreditType(row.descricao);
+    const needsTarget = CARD_CREDIT_TYPES_WITH_TARGET_COMPETENCE.includes(creditoTipo);
+    const creditoCompetencia = row.creditoCompetencia || (needsTarget ? defaultCompetencia : null);
+    const next = {
       ...row,
-      creditoTipo: row.creditoTipo || null,
-      creditoCompetencia: row.creditoCompetencia || null,
-      _cardCreditNeedsReview: isCardCreditRowBlocked(row),
+      creditoTipo: creditoTipo || null,
+      creditoCompetencia: creditoCompetencia || null,
+      _cardCreditSuggested: !row.creditoTipo && Boolean(creditoTipo),
     };
+    next._cardCreditNeedsReview = isCardCreditRowBlocked(next);
+    return next;
   });
 }
 
-export function prepareCardImportRows(rows = [], { transactions = [], cartaoId } = {}) {
+export function prepareCardImportRows(rows = [], { transactions = [], cartaoId, defaultCompetencia = null } = {}) {
   const installmentIndexes = buildExistingCardInstallmentIndexes(transactions, { cartaoId });
 
   const prepared = (rows || []).map(row => {
@@ -227,7 +247,7 @@ export function prepareCardImportRows(rows = [], { transactions = [], cartaoId }
     };
   });
 
-  return classifyImportedCardCreditRows(prepared);
+  return classifyImportedCardCreditRows(prepared, { defaultCompetencia });
 }
 
 export function splitCardRowsForExpansion(rows = []) {

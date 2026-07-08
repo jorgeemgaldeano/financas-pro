@@ -5,6 +5,7 @@ import {
   isCardCreditDiscardedOnImport,
   isCardCreditRowBlocked,
   resolveCardCreditCompetencia,
+  suggestCardCreditType,
 } from "../src/services/cardImportService.js";
 
 describe("classifyImportedCardCreditRows", () => {
@@ -73,6 +74,52 @@ describe("resolveCardCreditCompetencia", () => {
 
   it("estorno/parcelamento_avista sem competência de destino retorna null (não cai para o lote)", () => {
     expect(resolveCardCreditCompetencia({ tipo: "receita", creditoTipo: CARD_CREDIT_TYPES.ESTORNO }, "2026-07")).toBeNull();
+  });
+});
+
+describe("suggestCardCreditType (v0.3.32.1 — sugestão por memo)", () => {
+  it("sugere estorno para devolução (mesmo com PAGAMENTO no texto)", () => {
+    expect(suggestCardCreditType("DEVOLUCAO JUROS PAGAMENTO TITULO")).toBe(CARD_CREDIT_TYPES.ESTORNO);
+    expect(suggestCardCreditType("ESTORNO COMPRA")).toBe(CARD_CREDIT_TYPES.ESTORNO);
+  });
+
+  it("sugere reparcelamento à vista para #PCV / PARC.COMP.VIST", () => {
+    expect(suggestCardCreditType("#PCV PARC.COMP.VIST-Booking.")).toBe(CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA);
+  });
+
+  it("sugere pagamento da fatura anterior para PGTO/CASH", () => {
+    expect(suggestCardCreditType("PGTO. CASH AG. 4305 00043 200100")).toBe(CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR);
+  });
+
+  it("retorna null quando o memo não é reconhecível", () => {
+    expect(suggestCardCreditType("CREDITO GENERICO XYZ")).toBeNull();
+    expect(suggestCardCreditType("")).toBeNull();
+  });
+});
+
+describe("classifyImportedCardCreditRows com default de competência", () => {
+  it("pré-preenche tipo pelo memo e competência de destino com o mês da importação", () => {
+    const rows = [
+      { _id:"1", tipo:"receita", valor:9.62, descricao:"DEVOLUCAO BR" },
+      { _id:"2", tipo:"receita", valor:1006.8, descricao:"#PCV PARC.COMP.VIST-Booking" },
+      { _id:"3", tipo:"receita", valor:12061.77, descricao:"PGTO. CASH AG 200100" },
+    ];
+    const out = classifyImportedCardCreditRows(rows, { defaultCompetencia:"2026-06" });
+    expect(out[0].creditoTipo).toBe(CARD_CREDIT_TYPES.ESTORNO);
+    expect(out[0].creditoCompetencia).toBe("2026-06");
+    expect(isCardCreditRowBlocked(out[0])).toBe(false); // não bloqueado → importável
+    expect(out[1].creditoTipo).toBe(CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA);
+    expect(out[1].creditoCompetencia).toBe("2026-06");
+    // Pagamento não precisa de competência de destino:
+    expect(out[2].creditoTipo).toBe(CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR);
+    expect(out[2].creditoCompetencia).toBeNull();
+  });
+
+  it("não sobrescreve classificação manual já feita pelo usuário", () => {
+    const rows = [{ _id:"1", tipo:"receita", valor:50, descricao:"DEVOLUCAO", creditoTipo:CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA, creditoCompetencia:"2026-03" }];
+    const out = classifyImportedCardCreditRows(rows, { defaultCompetencia:"2026-06" });
+    expect(out[0].creditoTipo).toBe(CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA);
+    expect(out[0].creditoCompetencia).toBe("2026-03");
   });
 });
 

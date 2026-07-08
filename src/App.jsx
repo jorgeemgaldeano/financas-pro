@@ -25,7 +25,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.32.0";
+const APP_VERSION = "0.3.32.1";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -3013,10 +3013,10 @@ export default function App() {
         // v0.3.26.5: identifica o master lógico antes da expansão e evita falso duplicado entre parcelas futuras.
         // Regra: cartão + descrição base + data da compra + valor da parcela com tolerância de R$ 0,05.
         // Linhas que já pertencem a master existente não devem ser expandidas novamente.
-        const preparedRows = prepareCardImportRows(rows, { transactions:trans, cartaoId:impCId });
+        const preparedRows = prepareCardImportRows(rows, { transactions:trans, cartaoId:impCId, defaultCompetencia:impCompetencia });
         const { expandable, blocked } = splitCardRowsForExpansion(preparedRows);
         const expandedRows = expandImportedRows(expandable, { impCompetencia, createId: uid });
-        rows = prepareCardImportRows([...expandedRows, ...blocked], { transactions:trans, cartaoId:impCId });
+        rows = prepareCardImportRows([...expandedRows, ...blocked], { transactions:trans, cartaoId:impCId, defaultCompetencia:impCompetencia });
       } else {
         rows=expandImportedRows(rows, { impCompetencia, createId: uid });
       }
@@ -3197,7 +3197,7 @@ export default function App() {
     }
 
     setTrans(result.transactions);
-    const refreshedRows = prepareCardImportRows(impRows, { transactions:result.transactions, cartaoId:impCId })
+    const refreshedRows = prepareCardImportRows(impRows, { transactions:result.transactions, cartaoId:impCId, defaultCompetencia:impCompetencia })
       .map(item => item._id === row._id ? {
         ...item,
         _cardInstallmentUserDecision: mode === "current_only" ? "alterada somente a competência atual" : "alterada competência atual e futuras",
@@ -4370,6 +4370,12 @@ export default function App() {
             {impStep==="review"&&(
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                 <div style={card()}><div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4, gap:12, flexWrap:"wrap" }}><div><div style={{ fontWeight:700, fontSize:14 }}>2 · Revise os lançamentos</div><div style={{ fontSize:12, color:C.soft }}><strong style={{ color:C.text }}>{impFile}</strong> · {impMode==="cartao"?<>competência <strong style={{ color:C.text }}>{impCompetencia}</strong></>:<>conta <strong style={{ color:C.text }}>{contas.find(c=>c.id===impContaId)?.nome||"—"}</strong></>} · {impRows.length} lançamentos · <span style={{ color:C.gold }}>{Object.values(impTog).filter(Boolean).length} selecionados</span>{(impDups.size>0||impIgnored.length>0)&&<span style={{ color:C.coral }}> · {impDups.size + impIgnored.length} duplicatas/ignorados</span>}</div></div><button onClick={resetImport} style={ghost()}>← Voltar</button></div><div style={{ display:"flex", gap:7, marginTop:10, flexWrap:"wrap" }}><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,!impDups.has(r._id) && !(impMode==="cartao" && isCardCreditRowBlocked(r))])))} style={ghost()}>Sel. tudo</button><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,false])))} style={ghost()}>Desmarcar</button></div>{(impDups.size>0||impIgnored.length>0)&&<div style={{ marginTop:10, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Duplicatas</div><div style={{ fontWeight:800, color:C.gold }}>{impDups.size}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Ignorados por regra</div><div style={{ fontWeight:800, color:C.coral }}>{impIgnored.length}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Selecionados</div><div style={{ fontWeight:800, color:C.emerald }}>{Object.values(impTog).filter(Boolean).length}</div></div></div>}{impIgnored.length>0&&<div style={{ marginTop:10, fontSize:11, color:C.soft }}>Ignorados automaticamente: {impIgnored.slice(0,3).map(i=>i.motivo).join(", ")}{impIgnored.length>3?` e mais ${impIgnored.length-3}`:""}.</div>}</div>
+                {impMode==="cartao"&&(()=>{ const pend=impRows.filter(r=>r.tipo==="receita"&&isCardCreditRowBlocked(r)); if(!pend.length) return null; const soma=pend.reduce((s,r)=>s+r.valor,0); return (
+                  <div style={{ ...card(), borderColor:C.gold, background:C.gold+"12" }}>
+                    <div style={{ fontWeight:800, fontSize:13, color:C.gold, marginBottom:5 }}>⚠️ {pend.length} crédito(s) sem classificação — {fmtBRL(soma)}</div>
+                    <div style={{ fontSize:12, color:C.soft }}>Classifique cada crédito (coluna à direita) para que abata a fatura. Créditos sem classificação <strong>não serão importados</strong> e a fatura ficará mais alta. Estornos e reparcelamentos já vêm sugeridos com a competência de {impCompetencia}.</div>
+                  </div>
+                ); })()}
                 <div style={card({ padding:0, overflow:"hidden" })}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                     <thead><tr style={{ background:C.border }}>{["","Data",impMode==="cartao"?"Competência":"Tipo","Descrição","Categoria","Parcela","Valor",""] .map((h,i)=><th key={i} style={{ padding:"8px 11px", textAlign:i===6?"right":"left", color:C.soft, fontSize:10 }}>{h}</th>)}</tr></thead>
