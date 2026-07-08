@@ -925,3 +925,53 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
 
 - Pendente validação local com `npm run build` e `npm run dev`.
 - Pendente reteste dos cenários de divergência de parcela.
+
+---
+
+## [0.3.26.8] - 2026-07-07
+
+### Corrigido
+
+- Corrigida a importação de fatura de cartão via OFX do Banco do Brasil: o
+  tipo do lançamento (receita/despesa) passa a ser determinado pelo campo
+  `TRNTYPE` quando presente, em vez de depender só do sinal de `TRNAMT`.
+  `TRNTYPE=CREDIT` (pagamento da fatura ou estorno) agora é importado como
+  `receita`, reduzindo o total da fatura; `TRNTYPE=PAYMENT` (lançamento que
+  compõe a fatura) é importado como `despesa`. Antes, pagamentos de fatura do
+  BB podiam ser gravados como despesa, inflando indevidamente o total.
+  (`src/services/importService.js`, função `parseOFX`)
+- Corrigido `confirmImport` em `src/App.jsx`: ao confirmar a importação de
+  cartão, o tipo do lançamento gravado (`tipo: r.tipo || "despesa"`) passa a
+  respeitar o tipo já classificado pelo parser, em vez de forçar sempre
+  `"despesa"`. Sem esse ajuste, a correção do parser era anulada no momento
+  de salvar a transação.
+
+### Verificado (sem alteração de código)
+
+- Investigado relato de que excluir uma pessoa na aba **Pessoas** não
+  removia a dívida associada. Revisão de `delPessoa` em `src/App.jsx` e
+  teste manual (criar pessoa com dívida aberta, excluir, conferir
+  `localStorage`) confirmaram que a exclusão já remove em cascata `dividas`
+  e `despPess` pelo mesmo `pessoaId`, na mesma chamada. Nenhum caminho de
+  código encontrado que deixe dívida órfã. Sem alteração aplicada.
+
+### Alterado
+
+- Versão visual da aplicação atualizada para `v0.3.26.8`.
+
+### Migração
+
+- Não houve alteração de chaves do LocalStorage.
+- Não houve alteração de estrutura persistida.
+- Nenhuma migração necessária.
+
+### Testes
+
+- `npm test` (vitest): 32/32 passando.
+- Validado manualmente no preview: importação de um OFX sintético de
+  cartão com `TRNTYPE PAYMENT` (compra) e `TRNTYPE CREDIT` (pagamento de
+  fatura + estorno) — prévia e transações gravadas exibiram corretamente
+  despesa/receita e o valor líquido esperado.
+- Exclusão de pessoa com dívida aberta testada via UI + inspeção do
+  `localStorage` (`fpro_v1_pessoas`, `fpro_v1_dividas`): dívida removida
+  junto com a pessoa.

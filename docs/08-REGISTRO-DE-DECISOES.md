@@ -1023,3 +1023,71 @@ Sem nova chave e sem migração. Apenas campos opcionais de rastreabilidade pode
 ### Impacto em regra de negócio
 
 Alto para importação de cartão, pois define o comportamento correto para divergências de sequência de parcelas.
+
+---
+
+## DEC-0027 — Classificar lançamento de fatura OFX pelo TRNTYPE, não só pelo sinal do TRNAMT
+
+Data: 2026-07-07
+
+### Contexto
+
+Na importação de fatura de cartão via OFX do Banco do Brasil, `parseOFX`
+decidia receita/despesa unicamente pelo sinal de `TRNAMT`, e descartava
+qualquer lançamento com valor positivo (`if (mode === "cartao" && amount >= 0)
+continue`). No arquivo real do BB, pagamentos de fatura e estornos
+(`TRNTYPE=CREDIT`) nem sempre têm `TRNAMT` positivo, então entravam como
+despesa comum em vez de reduzir o total da fatura — gerando divergência
+entre o valor calculado no app e o valor real da fatura.
+
+### Decisão
+
+Em `parseOFX`, quando `mode === "cartao"`, usar o campo `TRNTYPE` como fonte
+primária de classificação: `CREDIT` → `tipo: "receita"` (reduz a fatura,
+via `signedCardAmount`), `PAYMENT` → `tipo: "despesa"` (compõe a fatura).
+Quando `TRNTYPE` não é `CREDIT` nem `PAYMENT` (ausente ou outro valor), o
+comportamento anterior é mantido como fallback: classifica pelo sinal de
+`TRNAMT` e descarta valores positivos.
+
+Complementar: `confirmImport` em `App.jsx` gravava sempre `tipo:"despesa"`
+para lançamentos de cartão, independente do que o parser classificava.
+Passou a gravar `tipo: r.tipo || "despesa"`, para não anular a correção do
+parser no momento de salvar.
+
+### Alternativas avaliadas
+
+- Adicionar um seletor de banco (como já existe para extrato bancário) e
+  aplicar a regra só quando `bancoImportacao === "bb"`. Descartada por ora:
+  a importação de cartão hoje não tem esse seletor na UI, e `TRNTYPE`
+  `CREDIT`/`PAYMENT` já é específico o suficiente para não colidir com
+  arquivos de outras administradoras (que tendem a usar `DEBIT` para
+  compras).
+- Deixar de descartar créditos e apenas inverter o sinal sem olhar
+  `TRNTYPE`. Descartada por não refletir o dado real do arquivo do BB
+  (`TRNAMT` não é confiável para essa distinção nesse extrato).
+
+### Consequências positivas
+
+- Pagamento de fatura e estorno importados do BB deixam de inflar
+  indevidamente o total da fatura.
+- Fallback preserva o comportamento existente para arquivos sem `TRNTYPE`
+  reconhecido, sem regressão para outras administradoras.
+
+### Consequências negativas ou riscos
+
+- Depende do `TRNTYPE` do arquivo estar correto; se outra administradora
+  usar `PAYMENT`/`CREDIT` com semântica diferente da observada no BB, a
+  classificação pode sair errada para esse banco. Não há seletor de banco
+  na importação de cartão hoje para restringir a regra.
+
+### Impacto em LocalStorage
+
+Nenhum. Sem nova chave, sem migração. Lançamentos importados como `receita`
+de cartão já eram suportados por `signedCardAmount` (usado em ajuste de
+fatura).
+
+### Impacto em regra de negócio
+
+Médio-alto: altera o valor total calculado da fatura para arquivos OFX do
+BB que contenham `TRNTYPE=CREDIT`/`PAYMENT`. Não altera cálculo de fatura
+para lançamentos manuais, CSV ou outros bancos.
