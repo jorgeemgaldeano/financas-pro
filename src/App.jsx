@@ -2905,7 +2905,7 @@ export default function App() {
       }))]);
     } else {
       setTrans(p=>[...p,...ok.map(r=>({
-        id:uid(), tipo:"despesa", origem:"cartao", cartaoId:impCId, contaId:null,
+        id:uid(), tipo:r.tipo||"despesa", origem:"cartao", cartaoId:impCId, contaId:null,
         catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data, dataCompra:r.dataCompra||r.data,
         competencia:r.competencia||impCompetencia, fixo:false, importado:true, importTipo:"cartao", importBatchId,
         parcela:r.parcela||null, totalParcelas:r.totalParcelas||null, parcelaGrupo:r.parcelaGrupo||buildCardInstallmentGroupId(r, { cartaoId:impCId })||null, descricaoBaseParcelamento:r.descricaoBaseParcelamento||null, parcelado:Boolean(r.parcela&&r.totalParcelas), status:"pago", valorPago:r.valor,

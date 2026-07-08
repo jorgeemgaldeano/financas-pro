@@ -372,12 +372,24 @@ export const parseOFX = (text, {
     const date = pDate(getTag("DTPOSTED") || getTag("DTUSER"));
     const amount = pSignedVal(getTag("TRNAMT"));
     const memo = [getTag("MEMO"), getTag("NAME"), getTag("CHECKNUM")].filter(Boolean).join(" · ") || "Lançamento importado";
+    const trnType = getTag("TRNTYPE").toUpperCase();
 
     if (!date || amount === null || Math.abs(amount) === 0 || isBalanceOrTotalRow(memo)) continue;
     if (mode === "bancario" && ignoredBankImportReason(memo)) continue;
-    if (mode === "cartao" && amount >= 0) continue;
 
-    const tipo = amount >= 0 ? "receita" : "despesa";
+    // No OFX de fatura de cartão do Banco do Brasil, o campo TRNTYPE identifica
+    // corretamente a natureza do lançamento mesmo quando o sinal de TRNAMT é
+    // inconsistente: CREDIT é pagamento da fatura ou estorno (reduz o total) e
+    // PAYMENT é lançamento que compõe a fatura (aumenta o total).
+    let tipo;
+    if (mode === "cartao" && trnType === "CREDIT") {
+      tipo = "receita";
+    } else if (mode === "cartao" && trnType === "PAYMENT") {
+      tipo = "despesa";
+    } else {
+      if (mode === "cartao" && amount >= 0) continue;
+      tipo = amount >= 0 ? "receita" : "despesa";
+    }
     rows.push({
       _id: getTag("FITID") || `imp_${createId()}`,
       importTipo: mode,
