@@ -118,6 +118,7 @@ Use este checklist sempre que uma alteração for feita no aplicativo.
 - [ ] Evitar duplicidade quando possível.
 - [ ] Permitir classificar lançamentos importados.
 - [ ] Importar extrato de cartão para o cartão selecionado.
+- [ ] Linha de crédito de cartão (RN030) marca automaticamente ao ser classificada (tipo, e competência de destino quando exigida), sem exigir marcação manual adicional.
 
 ## 11. Validação visual mínima
 

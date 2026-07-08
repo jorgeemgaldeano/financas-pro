@@ -463,3 +463,4 @@ Créditos identificados na importação de fatura de cartão (`tipo:"receita"`, 
 - Crédito de reparcelamento de compra à vista ou estorno: o usuário deve informar a competência de destino, e o valor deve entrar como crédito (redução) na fatura dessa competência, não na competência do lote de importação.
 - O sistema não deve permitir salvar um crédito de reparcelamento/estorno em competência cuja fatura já esteja fechada, sem antes reabrir a fatura (mesma regra de RN012 para lançamentos novos).
 - A ausência de classificação não deve resultar em importação automática do crédito na competência do lote (regra anterior a esta era considerada incorreta).
+- Ao classificar a linha (e informar a competência de destino, quando exigida), ela deve ser marcada automaticamente para importação — o usuário não deve precisar marcá-la manualmente depois de classificá-la (bug corrigido na v0.3.30.1: a linha ficava desbloqueada, mas permanecia desmarcada).

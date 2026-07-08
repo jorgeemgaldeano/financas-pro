@@ -22,7 +22,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.30.0";
+const APP_VERSION = "0.3.30.1";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -4245,14 +4245,14 @@ export default function App() {
                           <td style={{ padding:"8px 11px", color:r.tipo==="receita"?C.emerald:C.soft, whiteSpace:"nowrap", fontWeight:impMode!=="cartao"?700:400 }}>{impMode==="cartao"?(isCredit?(resolveCardCreditCompetencia(r, impCompetencia)||"—"):r.competencia):(r.tipo==="receita"?"Receita":"Despesa")}</td>
                           <td style={{ padding:"8px 11px" }}><div>{r.descricao}</div>{r.importadoFuturo&&<div style={{ fontSize:10, color:C.soft }}>gerado automaticamente para parcela futura</div>}{r._cardInstallmentStatus==="novo_parcelamento"&&<div style={{ fontSize:10, color:C.emerald }}>parcelamento novo controlado internamente</div>}{isDup&&<div style={{ fontSize:10, color:C.gold }}>⚠ {r._cardInstallmentReason || "duplicata desprezada por padrão"}</div>}{r._cardInstallmentCanCorrectSequence&&<div style={{ fontSize:10, color:C.gold, marginTop:5 }}>⚠ Divergência listada para análise manual no painel abaixo.</div>}
                             {isCredit&&<div style={{ marginTop:6, display:"flex", flexDirection:"column", gap:4 }}>
-                              <select style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoTipo||""} onChange={e=>{ const v=e.target.value||null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoTipo:v,creditoCompetencia:v===CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA?(r.competencia||impCompetencia):null}:x)); }}>
+                              <select style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoTipo||""} onChange={e=>{ const v=e.target.value||null; const nextCreditoCompetencia=v===CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA?(r.competencia||impCompetencia):null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoTipo:v,creditoCompetencia:nextCreditoCompetencia}:x)); if(!isCardCreditRowBlocked({ ...r, creditoTipo:v, creditoCompetencia:nextCreditoCompetencia })) setImpTog(p=>({...p,[r._id]:true})); }}>
                                 <option value="">⚠ Classifique este crédito</option>
                                 <option value={CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR}>Pagamento da fatura anterior (desprezar)</option>
                                 <option value={CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA}>Crédito de reparcelamento de compra à vista</option>
                                 <option value={CARD_CREDIT_TYPES.ESTORNO}>Estorno de juros</option>
                               </select>
                               {(r.creditoTipo===CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA||r.creditoTipo===CARD_CREDIT_TYPES.ESTORNO)&&
-                                <input type="month" style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoCompetencia||""} onChange={e=>{ const v=e.target.value||null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoCompetencia:v}:x)); }}/>
+                                <input type="month" style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoCompetencia||""} onChange={e=>{ const v=e.target.value||null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoCompetencia:v}:x)); if(!isCardCreditRowBlocked({ ...r, creditoCompetencia:v })) setImpTog(p=>({...p,[r._id]:true})); }}/>
                               }
                               {creditBlocked&&<div style={{ fontSize:10, color:C.coral }}>Selecione a classificação{r.creditoTipo&&r.creditoTipo!==CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR?" e a competência de destino":""} para liberar esta linha.</div>}
                             </div>}
