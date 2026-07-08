@@ -147,10 +147,55 @@ function hasEquivalentPreviewInstallment(row = {}, signatures = [], { cartaoId }
   ));
 }
 
+// v0.3.30.0
+// Créditos de OFX de cartão (TRNTYPE=CREDIT, tipo:"receita") podem representar
+// coisas bem diferentes: pagamento da fatura anterior, crédito de reparcelamento
+// de compra à vista, ou estorno. Cada caso afeta uma fatura/competência diferente,
+// então exigimos classificação manual antes de liberar a linha para importação.
+export const CARD_CREDIT_TYPES = {
+  PAGAMENTO_FATURA_ANTERIOR: "pagamento_fatura_anterior",
+  PARCELAMENTO_AVISTA: "parcelamento_avista",
+  ESTORNO: "estorno",
+};
+
+const CARD_CREDIT_TYPES_WITH_TARGET_COMPETENCE = [
+  CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA,
+  CARD_CREDIT_TYPES.ESTORNO,
+];
+
+export function isCardCreditRow(row = {}) {
+  return row.tipo === "receita";
+}
+
+export function isCardCreditRowBlocked(row = {}) {
+  if (!isCardCreditRow(row)) return false;
+  if (!row.creditoTipo) return true;
+  if (CARD_CREDIT_TYPES_WITH_TARGET_COMPETENCE.includes(row.creditoTipo) && !row.creditoCompetencia) return true;
+  return false;
+}
+
+export function resolveCardCreditCompetencia(row = {}, impCompetencia = null) {
+  if (!isCardCreditRow(row)) return row.competencia || impCompetencia;
+  if (CARD_CREDIT_TYPES_WITH_TARGET_COMPETENCE.includes(row.creditoTipo)) return row.creditoCompetencia || null;
+  return row.competencia || impCompetencia;
+}
+
+export function classifyImportedCardCreditRows(rows = []) {
+  return (rows || []).map(row => {
+    if (!isCardCreditRow(row)) return row;
+    return {
+      ...row,
+      creditoTipo: row.creditoTipo || null,
+      creditoCompetencia: row.creditoCompetencia || null,
+      _cardCreditNeedsReview: isCardCreditRowBlocked(row),
+    };
+  });
+}
+
 export function prepareCardImportRows(rows = [], { transactions = [], cartaoId } = {}) {
   const installmentIndexes = buildExistingCardInstallmentIndexes(transactions, { cartaoId });
 
-  return (rows || []).map(row => {
+  const prepared = (rows || []).map(row => {
     const dataCompra = getCardInstallmentPurchaseDate(row);
     const classification = classifyImportedCardInstallmentRow(row, { cartaoId, existingIndexes: installmentIndexes });
     const isInstallment = classification.isInstallment || Boolean(row.parcelado);
@@ -172,6 +217,8 @@ export function prepareCardImportRows(rows = [], { transactions = [], cartaoId }
       _cardInstallmentMatchedCompetence: classification.matchedCompetencia || null,
     };
   });
+
+  return classifyImportedCardCreditRows(prepared);
 }
 
 export function splitCardRowsForExpansion(rows = []) {

@@ -15,13 +15,14 @@ import { buildProjectionInsights, buildRealCashFlowProjection } from "./services
 import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
 import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
-import { buildCardImportDuplicateSet, prepareCardImportRows, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
+import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
+import { getOrphanDividas } from "./utils/dividaUtils.js";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.26.9";
+const APP_VERSION = "0.3.30.0";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -888,6 +889,8 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
   const totalDespMesPend= despMes.filter(d=>d.status==="pendente").reduce((s,d)=>s+(Number(d.valor)||0),0);
   const totalDespMesRec = despMes.filter(d=>despQuitado(d)).reduce((s,d)=>s+(Number(d.valor)||0),0);
 
+  const dividasOrfas = getOrphanDividas(dividas, pessoas);
+
   // Per-person summary for lista view
   const pessoasSummary = pessoas.map(p=>{
     const pdivs   = dividas.filter(d=>d.pessoaId===p.id);
@@ -1037,6 +1040,25 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
           </div>
         ))}
       </div>
+
+      {/* Dívidas sem pessoa vinculada (dados órfãos) */}
+      {dividasOrfas.length>0 && (
+        <div style={{ ...s.card2(), border:`1px solid ${C.coral}` }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.coral, marginBottom:10 }}>⚠️ Dívidas sem pessoa vinculada</div>
+          <div style={{ fontSize:12, color:C.soft, marginBottom:12 }}>Estas dívidas estão incluídas no "Total de Dívidas" acima, mas não pertencem a nenhuma pessoa cadastrada atualmente. Revise e exclua se não forem mais necessárias.</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {dividasOrfas.map(d=>(
+              <div key={d.id} style={{ ...s.row, background:C.navy, borderRadius:8, padding:"9px 12px" }}>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:13 }}>{d.descricao||"Dívida sem descrição"}</div>
+                  <div style={{ fontSize:11, color:C.soft }}>Pendente: {fmtBRL(pendPorDivida(d))} · Total: {fmtBRL(d.total)}</div>
+                </div>
+                <button onClick={()=>delDivida(d.id)} style={{ background:"transparent", border:"none", color:C.muted, cursor:"pointer", fontSize:15 }}>×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Lista de pessoas */}
       <div style={s.card2()}>
@@ -1889,6 +1911,12 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                   <span style={{ fontSize:13 }}>{opt.l}</span>
                 </label>
               ))}
+              <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", background:C.navy, borderRadius:8, padding:"11px 13px" }}>
+                <div onClick={()=>setParamsBuf(p=>({...p,aiCategorization:{...p.aiCategorization,enabled:!p.aiCategorization?.enabled}}))} style={{ width:38, height:22, borderRadius:11, background:paramsBuf.aiCategorization?.enabled?C.emerald:C.border, position:"relative", cursor:"pointer", transition:"background .2s", flexShrink:0 }}>
+                  <div style={{ position:"absolute", top:3, left:paramsBuf.aiCategorization?.enabled?18:3, width:16, height:16, borderRadius:8, background:"#fff", transition:"left .2s" }}/>
+                </div>
+                <span style={{ fontSize:13 }}>Sugestão de categoria por IA (beta) — estrutura em preparação, ainda sem chamada real de provedor</span>
+              </label>
             </div>
 
             <div style={{ background:C.navy, borderRadius:10, padding:"13px 15px" }}>
@@ -2887,7 +2915,7 @@ export default function App() {
         });
       }
       setImpDups(dups);
-      setImpTog(Object.fromEntries(rows.map(r2=>[r2._id,!dups.has(r2._id)])));
+      setImpTog(Object.fromEntries(rows.map(r2=>[r2._id,!dups.has(r2._id) && !(impMode==="cartao" && isCardCreditRowBlocked(r2))])));
       setImpRows(rows);
       setImpStep("review");
     };
@@ -2917,6 +2945,23 @@ export default function App() {
     if((impMode==="bancario"||impMode==="vale")&&!impContaId){ setImpErr("Selecione a conta de destino."); return; }
     const destinationId = impMode === "cartao" ? impCId : impContaId;
     const selectedRows = impRows.filter(r=>impTog[r._id]);
+    if(impMode==="cartao" && selectedRows.some(r=>isCardCreditRowBlocked(r))){
+      setImpErr("Classifique todos os créditos selecionados (pagamento de fatura anterior, reparcelamento de compra à vista ou estorno) antes de importar.");
+      return;
+    }
+    if(impMode==="cartao"){
+      const card = cards.find(c => c.id === impCId);
+      const creditoComFaturaFechada = selectedRows.find(r=>{
+        if(r.tipo!=="receita"||r.creditoTipo===CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR) return false;
+        const alvo = resolveCardCreditCompetencia(r, impCompetencia);
+        return alvo && card && isInvoiceClosedForNewEntries(faturas, card, alvo);
+      });
+      if(creditoComFaturaFechada){
+        const alvo = resolveCardCreditCompetencia(creditoComFaturaFechada, impCompetencia);
+        setImpErr(`A fatura de ${card.nome} em ${formatMonthBR(alvo)} está ${invoiceClosureLabel(getInvoiceClosureStatusForMonth(faturas, card, alvo)).toLowerCase()}. Reabra a fatura antes de lançar este crédito nela.`);
+        return;
+      }
+    }
     let duplicateIds = new Set(impDups);
     if(impMode === "cartao") {
       duplicateIds = revalidateSelectedCardImportRows(selectedRows, { transactions:trans, cartaoId:impCId, initialDuplicateIds:duplicateIds });
@@ -2934,6 +2979,8 @@ export default function App() {
       setImpTog(prev=>Object.fromEntries(impRows.map(r=>[r._id, Boolean(prev[r._id]) && !duplicateIds.has(r._id)])));
     }
     const ok=selectedRows.filter(r=>!duplicateIds.has(r._id));
+    const creditosDesconsiderados = impMode==="cartao" ? ok.filter(r=>r.creditoTipo===CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR) : [];
+    const okFinal = impMode==="cartao" ? ok.filter(r=>r.creditoTipo!==CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR) : ok;
     const importBatchId=`batch_${uid()}`;
     const duplicadas = impRows.filter(r=>duplicateIds.has(r._id));
     const desmarcadas = impRows.filter(r=>!impTog[r._id]&&!duplicateIds.has(r._id));
@@ -2945,27 +2992,30 @@ export default function App() {
       destino:impMode==="cartao"?(cards.find(c=>c.id===impCId)?.nome||"Cartão"):(contas.find(c=>c.id===impContaId)?.nome||"Conta"),
       competencia:impMode==="cartao"?impCompetencia:(impMode==="vale"?impValeYear:null),
       totalLidas:impRows.length + impIgnored.length,
-      importadas:ok.length,
+      importadas:okFinal.length,
       duplicadas:duplicadas.length,
       ignoradas:impIgnored.length,
       desmarcadas:desmarcadas.length,
-      valorLiquido:ok.reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0),
+      creditosDesconsiderados:creditosDesconsiderados.length,
+      valorLiquido:okFinal.reduce((s,r)=>s+(r.tipo==="receita"?r.valor:-r.valor),0),
       ignoradasDetalhe:impIgnored.slice(0,20),
       duplicadasDetalhe:duplicadas.slice(0,20).map(r=>({ data:r.data, descricao:r.descricao, valor:r.valor, tipo:r.tipo, motivo:r._cardInstallmentReason || "Duplicidade identificada" })),
+      creditosDesconsideradosDetalhe:creditosDesconsiderados.slice(0,20).map(r=>({ data:r.data, descricao:r.descricao, valor:r.valor })),
     };
     if(impMode==="bancario"||impMode==="vale"){
       const conta=contas.find(c=>c.id===impContaId);
-      setTrans(p=>[...p,...ok.map(r=>({
+      setTrans(p=>[...p,...okFinal.map(r=>({
         id:uid(), tipo:r.tipo, origem:conta?.tipo||"corrente", cartaoId:null, contaId:impContaId,
         catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data,
         fixo:false, importado:true, importTipo:impMode, bancoImportacao:impMode==="bancario"?impBanco:null, fornecedorVale:r.fornecedorVale||null, carteiraVale:r.carteiraVale||null, hora:r.hora||null, importBatchId, status:"pago", valorPago:r.valor, competencia:mKey(r.data),
       }))]);
     } else {
-      setTrans(p=>[...p,...ok.map(r=>({
+      setTrans(p=>[...p,...okFinal.map(r=>({
         id:uid(), tipo:r.tipo||"despesa", origem:"cartao", cartaoId:impCId, contaId:null,
         catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data, dataCompra:r.dataCompra||r.data,
-        competencia:r.competencia||impCompetencia, fixo:false, importado:true, importTipo:"cartao", importBatchId,
+        competencia:resolveCardCreditCompetencia(r, impCompetencia), fixo:false, importado:true, importTipo:"cartao", importBatchId,
         parcela:r.parcela||null, totalParcelas:r.totalParcelas||null, parcelaGrupo:r.parcelaGrupo||buildCardInstallmentGroupId(r, { cartaoId:impCId })||null, descricaoBaseParcelamento:r.descricaoBaseParcelamento||null, parcelado:Boolean(r.parcela&&r.totalParcelas), status:"pago", valorPago:r.valor,
+        creditoTipo:r.creditoTipo||null,
       }))]);
     }
     setLastImportReport(reportBase);
@@ -3019,7 +3069,7 @@ export default function App() {
     const refreshedDups = buildCardImportDuplicateSet(refreshedRows, { transactions:result.transactions, cartaoId:impCId });
     setImpRows(refreshedRows);
     setImpDups(refreshedDups);
-    setImpTog(Object.fromEntries(refreshedRows.map(r=>[r._id,!refreshedDups.has(r._id)])));
+    setImpTog(Object.fromEntries(refreshedRows.map(r=>[r._id,!refreshedDups.has(r._id) && !isCardCreditRowBlocked(r)])));
     setImpErr(`Correção aplicada em ${result.changedCount} parcela(s). Revise a prévia novamente antes de confirmar a importação.`);
   };
 
@@ -4183,17 +4233,30 @@ export default function App() {
             </div>}
             {impStep==="review"&&(
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-                <div style={card()}><div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4, gap:12, flexWrap:"wrap" }}><div><div style={{ fontWeight:700, fontSize:14 }}>2 · Revise os lançamentos</div><div style={{ fontSize:12, color:C.soft }}><strong style={{ color:C.text }}>{impFile}</strong> · {impMode==="cartao"?<>competência <strong style={{ color:C.text }}>{impCompetencia}</strong></>:<>conta <strong style={{ color:C.text }}>{contas.find(c=>c.id===impContaId)?.nome||"—"}</strong></>} · {impRows.length} lançamentos · <span style={{ color:C.gold }}>{Object.values(impTog).filter(Boolean).length} selecionados</span>{(impDups.size>0||impIgnored.length>0)&&<span style={{ color:C.coral }}> · {impDups.size + impIgnored.length} duplicatas/ignorados</span>}</div></div><button onClick={resetImport} style={ghost()}>← Voltar</button></div><div style={{ display:"flex", gap:7, marginTop:10, flexWrap:"wrap" }}><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,!impDups.has(r._id)])))} style={ghost()}>Sel. tudo</button><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,false])))} style={ghost()}>Desmarcar</button></div>{(impDups.size>0||impIgnored.length>0)&&<div style={{ marginTop:10, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Duplicatas</div><div style={{ fontWeight:800, color:C.gold }}>{impDups.size}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Ignorados por regra</div><div style={{ fontWeight:800, color:C.coral }}>{impIgnored.length}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Selecionados</div><div style={{ fontWeight:800, color:C.emerald }}>{Object.values(impTog).filter(Boolean).length}</div></div></div>}{impIgnored.length>0&&<div style={{ marginTop:10, fontSize:11, color:C.soft }}>Ignorados automaticamente: {impIgnored.slice(0,3).map(i=>i.motivo).join(", ")}{impIgnored.length>3?` e mais ${impIgnored.length-3}`:""}.</div>}</div>
+                <div style={card()}><div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4, gap:12, flexWrap:"wrap" }}><div><div style={{ fontWeight:700, fontSize:14 }}>2 · Revise os lançamentos</div><div style={{ fontSize:12, color:C.soft }}><strong style={{ color:C.text }}>{impFile}</strong> · {impMode==="cartao"?<>competência <strong style={{ color:C.text }}>{impCompetencia}</strong></>:<>conta <strong style={{ color:C.text }}>{contas.find(c=>c.id===impContaId)?.nome||"—"}</strong></>} · {impRows.length} lançamentos · <span style={{ color:C.gold }}>{Object.values(impTog).filter(Boolean).length} selecionados</span>{(impDups.size>0||impIgnored.length>0)&&<span style={{ color:C.coral }}> · {impDups.size + impIgnored.length} duplicatas/ignorados</span>}</div></div><button onClick={resetImport} style={ghost()}>← Voltar</button></div><div style={{ display:"flex", gap:7, marginTop:10, flexWrap:"wrap" }}><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,!impDups.has(r._id) && !(impMode==="cartao" && isCardCreditRowBlocked(r))])))} style={ghost()}>Sel. tudo</button><button onClick={()=>setImpTog(Object.fromEntries(impRows.map(r=>[r._id,false])))} style={ghost()}>Desmarcar</button></div>{(impDups.size>0||impIgnored.length>0)&&<div style={{ marginTop:10, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Duplicatas</div><div style={{ fontWeight:800, color:C.gold }}>{impDups.size}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Ignorados por regra</div><div style={{ fontWeight:800, color:C.coral }}>{impIgnored.length}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"8px 10px" }}><div style={lbl}>Selecionados</div><div style={{ fontWeight:800, color:C.emerald }}>{Object.values(impTog).filter(Boolean).length}</div></div></div>}{impIgnored.length>0&&<div style={{ marginTop:10, fontSize:11, color:C.soft }}>Ignorados automaticamente: {impIgnored.slice(0,3).map(i=>i.motivo).join(", ")}{impIgnored.length>3?` e mais ${impIgnored.length-3}`:""}.</div>}</div>
                 <div style={card({ padding:0, overflow:"hidden" })}>
                   <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
                     <thead><tr style={{ background:C.border }}>{["","Data",impMode==="cartao"?"Competência":"Tipo","Descrição","Categoria","Parcela","Valor",""] .map((h,i)=><th key={i} style={{ padding:"8px 11px", textAlign:i===6?"right":"left", color:C.soft, fontSize:10 }}>{h}</th>)}</tr></thead>
                     <tbody>
-                      {impRows.map(r=>{ const ck=!!impTog[r._id], isDup=impDups.has(r._id); return (
+                      {impRows.map(r=>{ const ck=!!impTog[r._id], isDup=impDups.has(r._id); const isCredit=impMode==="cartao"&&r.tipo==="receita"; const creditBlocked=isCredit&&isCardCreditRowBlocked(r); return (
                         <tr key={r._id} style={{ borderTop:`1px solid ${C.border}`, background:!ck?C.navy+"60":isDup?C.gold+"0A":"transparent", opacity:ck?1:0.45 }}>
-                          <td style={{ padding:"8px 11px", width:30 }}><input type="checkbox" checked={ck} onChange={e=>setImpTog(p=>({...p,[r._id]:e.target.checked}))}/></td>
+                          <td style={{ padding:"8px 11px", width:30 }}><input type="checkbox" checked={ck} disabled={creditBlocked} onChange={e=>setImpTog(p=>({...p,[r._id]:e.target.checked}))}/></td>
                           <td style={{ padding:"8px 11px", color:C.soft, whiteSpace:"nowrap" }}>{fmtDate(r.data)}</td>
-                          <td style={{ padding:"8px 11px", color:r.tipo==="receita"?C.emerald:C.soft, whiteSpace:"nowrap", fontWeight:impMode!=="cartao"?700:400 }}>{impMode==="cartao"?r.competencia:(r.tipo==="receita"?"Receita":"Despesa")}</td>
-                          <td style={{ padding:"8px 11px" }}><div>{r.descricao}</div>{r.importadoFuturo&&<div style={{ fontSize:10, color:C.soft }}>gerado automaticamente para parcela futura</div>}{r._cardInstallmentStatus==="novo_parcelamento"&&<div style={{ fontSize:10, color:C.emerald }}>parcelamento novo controlado internamente</div>}{isDup&&<div style={{ fontSize:10, color:C.gold }}>⚠ {r._cardInstallmentReason || "duplicata desprezada por padrão"}</div>}{r._cardInstallmentCanCorrectSequence&&<div style={{ fontSize:10, color:C.gold, marginTop:5 }}>⚠ Divergência listada para análise manual no painel abaixo.</div>}</td>
+                          <td style={{ padding:"8px 11px", color:r.tipo==="receita"?C.emerald:C.soft, whiteSpace:"nowrap", fontWeight:impMode!=="cartao"?700:400 }}>{impMode==="cartao"?(isCredit?(resolveCardCreditCompetencia(r, impCompetencia)||"—"):r.competencia):(r.tipo==="receita"?"Receita":"Despesa")}</td>
+                          <td style={{ padding:"8px 11px" }}><div>{r.descricao}</div>{r.importadoFuturo&&<div style={{ fontSize:10, color:C.soft }}>gerado automaticamente para parcela futura</div>}{r._cardInstallmentStatus==="novo_parcelamento"&&<div style={{ fontSize:10, color:C.emerald }}>parcelamento novo controlado internamente</div>}{isDup&&<div style={{ fontSize:10, color:C.gold }}>⚠ {r._cardInstallmentReason || "duplicata desprezada por padrão"}</div>}{r._cardInstallmentCanCorrectSequence&&<div style={{ fontSize:10, color:C.gold, marginTop:5 }}>⚠ Divergência listada para análise manual no painel abaixo.</div>}
+                            {isCredit&&<div style={{ marginTop:6, display:"flex", flexDirection:"column", gap:4 }}>
+                              <select style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoTipo||""} onChange={e=>{ const v=e.target.value||null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoTipo:v,creditoCompetencia:v===CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA?(r.competencia||impCompetencia):null}:x)); }}>
+                                <option value="">⚠ Classifique este crédito</option>
+                                <option value={CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR}>Pagamento da fatura anterior (desprezar)</option>
+                                <option value={CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA}>Crédito de reparcelamento de compra à vista</option>
+                                <option value={CARD_CREDIT_TYPES.ESTORNO}>Estorno de juros</option>
+                              </select>
+                              {(r.creditoTipo===CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA||r.creditoTipo===CARD_CREDIT_TYPES.ESTORNO)&&
+                                <input type="month" style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoCompetencia||""} onChange={e=>{ const v=e.target.value||null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoCompetencia:v}:x)); }}/>
+                              }
+                              {creditBlocked&&<div style={{ fontSize:10, color:C.coral }}>Selecione a classificação{r.creditoTipo&&r.creditoTipo!==CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR?" e a competência de destino":""} para liberar esta linha.</div>}
+                            </div>}
+                          </td>
                           <td style={{ padding:"8px 11px" }}><CategorySelect cats={cats} value={r.catId} onChange={v=>setImpRows(p=>p.map(x=>x._id===r._id?{...x,catId:v}:x))} style={{ fontSize:11, padding:"3px 7px", width:"auto" }}/></td>
                           <td style={{ padding:"8px 11px", color:C.soft, whiteSpace:"nowrap" }}>{r.parcela?`${r.parcela}/${r.totalParcelas}`:"—"}</td>
                           <td style={{ padding:"8px 11px", textAlign:"right", fontWeight:700, color:r.tipo==="receita"?C.emerald:C.coral }}>{r.tipo==="receita"?"+":"-"}{fmtBRL(r.valor)}</td>
@@ -4228,7 +4291,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {impStep==="done"&&<div style={{ display:"flex", flexDirection:"column", gap:12 }}><div style={{ ...card(), textAlign:"center", padding:"34px 24px" }}><div style={{ fontSize:36, marginBottom:9 }}>✅</div><div style={{ fontWeight:800, fontSize:16, marginBottom:5 }}>Importação concluída!</div><div style={{ fontSize:13, color:C.soft, marginBottom:20 }}>Lançamentos adicionados {impMode==="cartao"?<>ao {cards.find(c=>c.id===impCId)?.nome} na competência {impCompetencia}</>:<>à conta {contas.find(c=>c.id===impContaId)?.nome}</>}.</div><div style={{ display:"flex", gap:9, justifyContent:"center", flexWrap:"wrap" }}><button onClick={resetImport} style={btn(C.emerald)}>Importar outro</button><button onClick={()=>{ setTab("lancamentos"); resetImport(); }} style={btn(C.border)}>Ver lançamentos</button>{lastImportReport?.id&&<button onClick={()=>undoImportBatch(lastImportReport.id)} style={btn(C.coral)}>Desfazer este lote</button>}</div></div>{lastImportReport&&<div style={card()}><div style={{ fontWeight:800, fontSize:14, marginBottom:10 }}>Relatório da importação</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Importados</div><div style={{ fontWeight:800, color:C.emerald }}>{lastImportReport.importadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Duplicados</div><div style={{ fontWeight:800, color:C.gold }}>{lastImportReport.duplicadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Ignorados</div><div style={{ fontWeight:800, color:C.coral }}>{lastImportReport.ignoradas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Valor líquido</div><div style={{ fontWeight:800, color:lastImportReport.valorLiquido>=0?C.emerald:C.coral }}>{fmtBRL(lastImportReport.valorLiquido)}</div></div></div>{lastImportReport.ignoradasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Ignorados por regra</div>{lastImportReport.ignoradasDetalhe.map(i=><div key={i.id} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>Linha {i.linha}: {i.motivo} — {i.descricao.slice(0,120)}</div>)}</div>}{lastImportReport.duplicadasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Duplicatas identificadas</div>{lastImportReport.duplicadasDetalhe.map((d,i)=><div key={i} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>{fmtDate(d.data)} · {d.descricao} · {fmtBRL(d.valor)}{d.motivo?` · ${d.motivo}`:""}</div>)}</div>}</div>}</div>}
+            {impStep==="done"&&<div style={{ display:"flex", flexDirection:"column", gap:12 }}><div style={{ ...card(), textAlign:"center", padding:"34px 24px" }}><div style={{ fontSize:36, marginBottom:9 }}>✅</div><div style={{ fontWeight:800, fontSize:16, marginBottom:5 }}>Importação concluída!</div><div style={{ fontSize:13, color:C.soft, marginBottom:20 }}>Lançamentos adicionados {impMode==="cartao"?<>ao {cards.find(c=>c.id===impCId)?.nome} na competência {impCompetencia}</>:<>à conta {contas.find(c=>c.id===impContaId)?.nome}</>}.</div><div style={{ display:"flex", gap:9, justifyContent:"center", flexWrap:"wrap" }}><button onClick={resetImport} style={btn(C.emerald)}>Importar outro</button><button onClick={()=>{ setTab("lancamentos"); resetImport(); }} style={btn(C.border)}>Ver lançamentos</button>{lastImportReport?.id&&<button onClick={()=>undoImportBatch(lastImportReport.id)} style={btn(C.coral)}>Desfazer este lote</button>}</div></div>{lastImportReport&&<div style={card()}><div style={{ fontWeight:800, fontSize:14, marginBottom:10 }}>Relatório da importação</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:8 }}><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Importados</div><div style={{ fontWeight:800, color:C.emerald }}>{lastImportReport.importadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Duplicados</div><div style={{ fontWeight:800, color:C.gold }}>{lastImportReport.duplicadas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Ignorados</div><div style={{ fontWeight:800, color:C.coral }}>{lastImportReport.ignoradas}</div></div><div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Valor líquido</div><div style={{ fontWeight:800, color:lastImportReport.valorLiquido>=0?C.emerald:C.coral }}>{fmtBRL(lastImportReport.valorLiquido)}</div></div>{lastImportReport.creditosDesconsiderados>0&&<div style={{ background:C.navy, borderRadius:8, padding:"9px 11px" }}><div style={lbl}>Créditos desconsiderados</div><div style={{ fontWeight:800, color:C.gold }}>{lastImportReport.creditosDesconsiderados}</div></div>}</div>{lastImportReport.creditosDesconsideradosDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Créditos desconsiderados (pagamento de fatura anterior)</div>{lastImportReport.creditosDesconsideradosDetalhe.map((d,i)=><div key={i} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>{fmtDate(d.data)} · {d.descricao} · {fmtBRL(d.valor)}</div>)}</div>}{lastImportReport.ignoradasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Ignorados por regra</div>{lastImportReport.ignoradasDetalhe.map(i=><div key={i.id} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>Linha {i.linha}: {i.motivo} — {i.descricao.slice(0,120)}</div>)}</div>}{lastImportReport.duplicadasDetalhe?.length>0&&<div style={{ marginTop:12 }}><div style={{ fontWeight:700, fontSize:12, marginBottom:6 }}>Duplicatas identificadas</div>{lastImportReport.duplicadasDetalhe.map((d,i)=><div key={i} style={{ fontSize:11, color:C.soft, borderTop:`1px solid ${C.border}`, padding:"5px 0" }}>{fmtDate(d.data)} · {d.descricao} · {fmtBRL(d.valor)}{d.motivo?` · ${d.motivo}`:""}</div>)}</div>}</div>}</div>}
           </div>
         )}
 

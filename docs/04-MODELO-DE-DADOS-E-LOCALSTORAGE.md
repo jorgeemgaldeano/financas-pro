@@ -318,6 +318,50 @@ Critérios:
 - Em compras parceladas, representa a competência da parcela correspondente.
 - Em dados antigos, quando ausente, o sistema deve usar fallback por `competencia` ou data.
 
+### Classificação de crédito de cartão (v0.3.30.0)
+
+Lançamentos de cartão com `tipo:"receita"` (créditos de OFX, ex.:
+`TRNTYPE=CREDIT`) podem possuir:
+
+```js
+{
+  creditoTipo: "estorno" // ou "parcelamento_avista" | "pagamento_fatura_anterior"
+}
+```
+
+Critérios:
+
+- Campo opcional. Ausente em dados antigos e em lançamentos que não são
+  crédito de cartão (despesas comuns) — sem impacto em `signedCardAmount`
+  nem em nenhum cálculo de fatura existente.
+- Existe só para rastreabilidade (auditoria de por que aquele crédito
+  entrou na fatura daquela competência). A competência final do
+  lançamento já usa o campo `competencia` normal — não há campo adicional
+  persistido para a competência de destino.
+- Créditos classificados como `pagamento_fatura_anterior` na prévia de
+  importação **não** geram lançamento (descartados antes de salvar); só
+  `parcelamento_avista` e `estorno` chegam a ser persistidos com esse
+  campo.
+
+### Sugestão de categoria por IA (v0.3.30.0)
+
+Novo campo opcional dentro de `params`:
+
+```js
+{
+  aiCategorization: { enabled: false }
+}
+```
+
+Critérios:
+
+- Campo opcional. Dados antigos sem o campo devem ser tratados como
+  `{ enabled: false }` (mesmo padrão de `autoCategoryRules`).
+- Nesta versão, mesmo com `enabled:true`, nenhuma chamada real de IA é
+  feita — o campo só controla a exibição de um toggle informativo em
+  Parâmetros. A integração real (chamada de API, chave, provedor) fica
+  para uma versão futura, quando o provedor for definido.
+
 ### Simulações
 
 As simulações podem ser persistidas em chave própria:

@@ -8,3 +8,6 @@ dist
 # Backups locais com dados financeiros reais
 backup*.json
 backups/
+
+# Arquivos de exemplo para teste manual de importação (podem conter dados reais)
+test-data/

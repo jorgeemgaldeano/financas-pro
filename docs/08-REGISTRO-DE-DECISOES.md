@@ -1173,3 +1173,206 @@ Médio: exclusões que antes eram sempre permitidas (com ou sem confirmação,
 dependendo do caso) agora podem ser bloqueadas quando há uso real. Nenhum
 cálculo financeiro existente muda — só a possibilidade de excluir um
 container que já está em uso.
+
+---
+
+## DEC-0029 — Expor dívida órfã em vez de excluir automaticamente
+
+Data: 2026-07-08
+
+### Contexto
+
+Usuário reportou o KPI "Total de Dívidas" (aba Pessoas) exibindo um valor
+que não correspondia a nenhuma pessoa visível na lista. Investigação
+confirmou que não há nenhum valor hardcoded no código: os KPIs globais
+(`totalDividas`, `totalEmAberto`, `totalPago`) somam todo o array
+`dividas` sem checar se `pessoaId` ainda existe em `pessoas`, enquanto a
+lista por pessoa (`pessoasSummary`, detalhe de pessoa) filtra por
+`pessoaId` válido. Uma dívida órfã (`pessoaId` sem pessoa correspondente
+— dado legado anterior à cascata de exclusão, ou backup antigo
+restaurado) infla os KPIs do topo indefinidamente, sem nenhum caminho de
+UI para o usuário encontrá-la e excluí-la.
+
+### Decisão
+
+Criar `getOrphanDividas(dividas, pessoas)` (`src/utils/dividaUtils.js`) e
+exibir um painel "Dívidas sem pessoa vinculada" na lista da aba Pessoas
+quando houver dívida órfã, reaproveitando `delDivida` já existente para a
+exclusão. Os KPIs globais continuam somando todo o array (não excluir
+automaticamente do total).
+
+### Alternativas avaliadas
+
+- Excluir/filtrar a dívida órfã automaticamente dos KPIs e da persistência.
+  Descartada: RN020 (não perder dado financeiro sem controle do usuário) —
+  a dívida pode representar dinheiro real que o usuário ainda quer revisar
+  antes de decidir.
+- Deixar como está e apenas documentar. Descartada: não resolve o sintoma
+  relatado, o usuário continuaria sem conseguir agir sobre o dado.
+
+### Consequências positivas
+
+- Usuário consegue finalmente ver e excluir (ou decidir manter) o registro
+  órfão.
+- Protege contra o mesmo sintoma no futuro (ex.: restauração de backup
+  antigo com dívida apontando para pessoa já removida).
+
+### Consequências negativas ou riscos
+
+- Nenhum risco identificado; mudança é aditiva (leitura + painel de UI).
+
+### Impacto em LocalStorage
+
+Nenhum. Sem novo campo, sem nova chave, sem migração.
+
+### Impacto em regra de negócio
+
+Baixo: não altera nenhum cálculo financeiro existente, apenas torna
+visível e acionável um dado que já existia mas ficava inacessível pela UI.
+
+---
+
+## DEC-0030 — Classificação manual de créditos de cartão na importação
+
+Data: 2026-07-08
+
+### Contexto
+
+Desde a `DEC-0027` (v0.3.26.8), créditos de OFX de fatura de cartão
+(`TRNTYPE=CREDIT`) são classificados como `tipo:"receita"` e reduzem a
+fatura. Porém `confirmImport` sempre gravava esses créditos com
+`competencia: r.competencia || impCompetencia` — ou seja, a competência do
+lote inteiro que está sendo importado. Na prática, um crédito pode
+representar três coisas diferentes: pagamento da fatura anterior (que já
+é tratado por um lançamento próprio de `pagamento_fatura`, então importar
+o `CREDIT` do OFX como receita de cartão duplicaria essa redução), crédito
+de reparcelamento de uma compra à vista (deveria reduzir a fatura da
+competência correspondente à compra, não a do lote atual), ou estorno
+(mesma lógica). O comportamento anterior sempre debitava a fatura errada
+quando o crédito não pertencia ao mês do lote.
+
+### Decisão
+
+Adicionar campo de classificação manual por linha de crédito na prévia de
+importação de cartão (`creditoTipo`: `pagamento_fatura_anterior` |
+`parcelamento_avista` | `estorno`, mais `creditoCompetencia` para os dois
+últimos). A linha fica bloqueada para seleção/importação até ser
+classificada (e, quando aplicável, até ter uma competência de destino
+válida). Em `confirmImport`:
+
+- `pagamento_fatura_anterior` → linha é descartada (não gera lançamento),
+  mas entra no relatório da importação (`creditosDesconsiderados`) para
+  ficar auditável.
+- `parcelamento_avista`/`estorno` → lançamento gravado com `competencia`
+  igual à competência de destino escolhida pelo usuário, validando antes
+  que a fatura de destino não esteja fechada
+  (`isInvoiceClosedForNewEntries`) — sem essa checagem, o crédito poderia
+  alterar silenciosamente uma fatura já fechada, violando RN012.
+
+Implementado em `src/services/cardImportService.js`
+(`classifyImportedCardCreditRows`, `isCardCreditRowBlocked`,
+`resolveCardCreditCompetencia`, `CARD_CREDIT_TYPES`) e `confirmImport`
+(`src/App.jsx`). Nova `RN030` em `02-REGRAS-DE-NEGOCIO.md`.
+
+### Alternativas avaliadas
+
+- Continuar assumindo que todo crédito pertence à competência do lote.
+  Descartada: é exatamente o bug relatado.
+- Tentar inferir automaticamente a que compra/fatura um crédito pertence
+  (ex.: por valor aproximado e descrição, como já é feito para
+  parcelamento). Descartada nesta versão: heurística arriscada para
+  dinheiro entrando/saindo de fatura fechada: dado dinheiro real e o risco
+  de acerto errado poder fechar/reabrir fatura incorretamente, decisão
+  manual explícita é mais segura como primeira versão.
+- Permitir salvar o crédito sem competência de destino, caindo de volta
+  para `impCompetencia`. Descartada: reintroduziria o bug original por
+  omissão do usuário.
+
+### Consequências positivas
+
+- Cada crédito passa a afetar a fatura correta.
+- Pagamento de fatura anterior não duplica a redução já feita pelo
+  lançamento de `pagamento_fatura`.
+- Fatura fechada não pode ser alterada silenciosamente por um crédito mal
+  direcionado.
+- Nada é descartado sem rastro — o bucket `creditosDesconsiderados` fica
+  visível no relatório da importação.
+
+### Consequências negativas ou riscos
+
+- Importação de cartão com créditos passa a exigir uma etapa manual a
+  mais (classificar cada crédito) — aceitável dado que é dinheiro real e
+  a alternativa (adivinhar) é mais arriscada.
+- `creditoCompetencia` depende de `<input type="month">` (`YYYY-MM`);
+  não deve ser derivado de `toISOString()` (risco de fuso horário já
+  documentado como bug real do projeto).
+
+### Impacto em LocalStorage
+
+Nenhuma chave nova. Novo campo opcional `creditoTipo` no lançamento de
+cartão salvo (fallback seguro para dados antigos sem o campo, mesmo
+padrão de `importBatchId`). `creditoCompetencia` existe só na prévia em
+memória, nunca é persistido.
+
+### Impacto em regra de negócio
+
+Alto para importação de cartão: muda que competência final um crédito do
+OFX recebe, e adiciona validação de fatura fechada que não existia para
+créditos antes desta versão (só existia para `impCompetencia`).
+
+---
+
+## DEC-0031 — Adiar chamada real de IA na categorização de importação
+
+Data: 2026-07-08
+
+### Contexto
+
+Usuário pediu para incluir IA na classificação automática de lançamentos
+importados, hoje 100% baseada em regras de palavra-chave e histórico
+(`src/services/categoryService.js`). O projeto não tem backend — qualquer
+chamada a uma API de LLM (OpenAI, Anthropic etc.) precisaria ser feita
+direto do navegador, expondo a chave de API no código-cliente.
+
+### Decisão
+
+Nesta versão, preparar apenas a estrutura (`src/services/
+aiCategorizationService.js`: `isAiCategorizationEnabled(params)`,
+`suggestCategoryWithAI(...)`), sem nenhuma chamada de rede real —
+`suggestCategoryWithAI` retorna sempre `{ ok:false, reason:"not_configured" }`.
+Novo campo opcional `params.aiCategorization = { enabled:false }`, com
+toggle "Sugestão de categoria por IA (beta)" em Parâmetros. O fluxo real
+de importação continua usando só `guessCategoryForTransaction` — o toggle
+não muda nenhum resultado de categorização ainda.
+
+### Alternativas avaliadas
+
+- Implementar a chamada real já nesta versão, com chave de API guardada em
+  `params` (LocalStorage). Descartada por ora: usuário optou
+  explicitamente por preparar a estrutura primeiro e decidir o provedor
+  depois, evitando expor uma chave real antes dessa decisão.
+- Não fazer nada até a decisão de provedor. Descartada: usuário queria ver
+  o scaffold pronto para poder ligar rapidamente depois.
+
+### Consequências positivas
+
+- Fluxo de importação real não muda nesta versão (zero risco de regressão
+  na categorização).
+- Quando o provedor for escolhido, a integração tem um ponto único de
+  entrada já preparado (`suggestCategoryWithAI`).
+
+### Consequências negativas ou riscos
+
+- Feature "aparenta" estar pronta na UI (toggle liga/desliga), mas ainda
+  não produz nenhum efeito real — mitigado com texto explícito no toggle
+  ("estrutura em preparação, ainda sem chamada real de provedor").
+
+### Impacto em LocalStorage
+
+Novo campo opcional `aiCategorization` dentro de `params`, fallback seguro
+`{ enabled:false }` para dados antigos. Sem migração.
+
+### Impacto em regra de negócio
+
+Nenhum nesta versão — não altera `guessCategoryForTransaction` nem o
+resultado de nenhuma importação.

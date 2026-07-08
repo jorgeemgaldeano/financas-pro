@@ -449,3 +449,17 @@ Quando a importação de cartão identificar que um parcelamento já existe, mas
 ### LocalStorage
 
 Sem nova chave obrigatória. Alterações confirmadas pelo usuário atualizam apenas campos já existentes ou opcionais nos lançamentos do cartão.
+
+---
+
+## RN030 — Classificação manual de créditos na importação de fatura de cartão
+
+Créditos identificados na importação de fatura de cartão (`tipo:"receita"`, ex.: `TRNTYPE=CREDIT` em OFX) devem ser classificados manualmente pelo usuário antes de serem importados.
+
+### Critérios
+
+- A linha de crédito deve ficar bloqueada para seleção até o usuário escolher uma das classificações: pagamento da fatura anterior, crédito de reparcelamento de compra à vista, ou estorno de compra.
+- Pagamento da fatura anterior: o valor deve ser desprezado na fatura atual (não gera lançamento), mas deve aparecer no relatório da importação para conferência.
+- Crédito de reparcelamento de compra à vista ou estorno: o usuário deve informar a competência de destino, e o valor deve entrar como crédito (redução) na fatura dessa competência, não na competência do lote de importação.
+- O sistema não deve permitir salvar um crédito de reparcelamento/estorno em competência cuja fatura já esteja fechada, sem antes reabrir a fatura (mesma regra de RN012 para lançamentos novos).
+- A ausência de classificação não deve resultar em importação automática do crédito na competência do lote (regra anterior a esta era considerada incorreta).
