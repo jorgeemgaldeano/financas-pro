@@ -2,7 +2,7 @@
 
 > Este arquivo é a **memória de projeto** do Claude Code. Ele é lido automaticamente
 > em toda sessão e tem prioridade sobre suposições. A referência-mãe conceitual
-> continua sendo `00-MINDMAP-GOVERNANCA.md`; este arquivo é a versão operacional dela
+> continua sendo `docs/00-MINDMAP-GOVERNANCA.md`; este arquivo é a versão operacional dela
 > para o Claude Code.
 
 ---
@@ -22,6 +22,15 @@ LocalStorage do navegador** (não há backend). Desenvolvimento iterativo, versi
 com documentação rastreável.
 
 Versão atual: faixa **v0.3.x**.
+
+---
+
+## Estilo de resposta
+- Não narre seu raciocínio nem descreva o que vai fazer antes de fazer.
+- Não escreva preâmbulos ("Vou agora...", "Deixa eu verificar...").
+- Trabalhe em silêncio e responda apenas com: (1) o resultado final e
+  (2) as decisões relevantes que tomei, de forma objetiva.
+- Sem resumos repetindo o que já está visível no diff.
 
 ---
 
@@ -85,7 +94,7 @@ Estas invariantes custaram bugs de produção. Violá-las é regressão:
 
 ## Regras de negócio
 
-As regras vivem em `02-REGRAS-DE-NEGOCIO.md`, numeradas como **RN001, RN002, ...**.
+As regras vivem em `docs/02-REGRAS-DE-NEGOCIO.md`, numeradas como **RN001, RN002, ...**.
 Ao mexer em fatura, parcelamento, saldo mensal, projeção, despesa compartilhada, etc.,
 **citar a RN afetada** e não alterar seu comportamento sem sinalizar (regra geral 3).
 
@@ -102,8 +111,8 @@ Ao mexer em fatura, parcelamento, saldo mensal, projeção, despesa compartilhad
 ## Convenção de documentação
 
 - Documentos numerados sequencialmente (`01-...`, `02-...`, ... já na casa dos 35+).
-- Todo entregável relevante gera/atualiza: entrada no **`09-CHANGELOG.md`**,
-  registro em **`08-REGISTRO-DE-DECISOES.md`** (estilo ADR) quando houver decisão,
+- Todo entregável relevante gera/atualiza: entrada no **`docs/09-CHANGELOG.md`**,
+  registro em **`docs/08-REGISTRO-DE-DECISOES.md`** (estilo ADR) quando houver decisão,
   guia de atualização e roteiro Git.
 - **Mudanças cirúrgicas e rastreáveis:** acompanhar de *diffs* legíveis para auditoria.
 

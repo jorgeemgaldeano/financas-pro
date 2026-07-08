@@ -1,6 +1,9 @@
 import { Fragment, useState, useMemo, useCallback, useEffect } from "react";
 import { RequiredFieldModal, requiredFieldInfo, highlightIfRequired } from "./components/ui/RequiredFieldModal.jsx";
 import { DateInput } from "./components/ui/DateInput.jsx";
+import { ConfirmDialog } from "./components/ui/ConfirmDialog.jsx";
+import { useToasts, ToastHost } from "./components/ui/Toast.jsx";
+import { moveCardTransactions, moveAccountTransactions, recategorizeCategory } from "./services/reassignmentService.js";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
 import { guessCategoryForTransaction, normText } from "./services/categoryService.js";
 import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
@@ -22,7 +25,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.31.0";
+const APP_VERSION = "0.3.32.0";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -1679,7 +1682,7 @@ function MetaInput({ catId, metas, setMetas, compact=false }) {
   );
 }
 
-function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, onExport, onImport, onReset }) {
+function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, reassignAndDeleteCard, reassignAndDeleteAccount, recategorizeWholeCat, reassignReasonMsg, onExport, onImport, onReset }) {
   const [section, setSection] = useState("cats");
   const [paramsBuf, setParamsBuf] = useState({...params});
   const [newCat, setNewCat] = useState({ nome:"", cor:"#B0BEC5", icon:"📦" });
@@ -1689,6 +1692,13 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
   const [editCardId, setEditCardId] = useState(null);
   const [importMsg, setImportMsg] = useState("");
   const [autoRuleForm, setAutoRuleForm] = useState({ tipo:"despesa", catId:"", keywords:"" });
+  // v0.3.32 — diálogos de reatribuição/recategorização e confirmação simples.
+  // { kind:"card"|"account", id, count, target, error } | null
+  const [reassignDlg, setReassignDlg] = useState(null);
+  // { fromId, target } | null  (recategorizar categoria por completo)
+  const [recatDlg, setRecatDlg] = useState(null);
+  // { title, message, tone, onConfirm } | null  (confirmações simples)
+  const [confirmDlg, setConfirmDlg] = useState(null);
 
   const ICONS=["🍽️","🚗","🏠","❤️","🎮","📚","👕","💻","💰","📦","✈️","🐾","🎓","🛒","💊","🎨","🏋️","🎯","🔧","🎁","🏦","🎪","🌍"];
   const COLORS=["#00A878","#F5B700","#E8504A","#4FC3F7","#CE93D8","#80DEEA","#FFAB40","#F48FB1","#A5D6A7","#B0BEC5","#7C3AED","#0891B2","#DB2777","#6366F1","#F97316","#84CC16","#34D399","#FB923C"];
@@ -1718,7 +1728,8 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
           <div style={{ display:"flex", gap:3, flexShrink:0 }}>
             <button onClick={()=>setRenameForm(p=>({...p,[cat.id]:cat.nome}))} style={ghost2()}>✏️</button>
             {depth<2&&<button onClick={()=>{ setNewSubForm(p=>({...p,[cat.id]:""})); setExpanded(p=>({...p,[cat.id]:true})); }} style={ghost2({ color:C.emerald })}>+ Sub</button>}
-            <button onClick={()=>{ if(window.confirm(`Excluir "${cat.nome}"?`)) delCat(cat.id); }} style={ghost2({ color:C.coral })}>×</button>
+            <button title="Recategorizar tudo para outra categoria" onClick={()=>setRecatDlg({ fromId:cat.id, fromNome:cat.nome, target:"" })} style={ghost2({ color:C.gold })}>↦</button>
+            <button onClick={()=>setConfirmDlg({ title:"Excluir categoria", message:`Excluir "${cat.nome}"? Se houver lançamentos vinculados, recategorize-os antes (botão ↦).`, tone:"coral", onConfirm:()=>{ delCat(cat.id); setConfirmDlg(null); } })} style={ghost2({ color:C.coral })}>×</button>
           </div>
         </div>
         {depth===0&&open&&(
@@ -1741,6 +1752,62 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      {/* v0.3.32 — Diálogo mover-e-excluir cartão */}
+      <ConfirmDialog
+        open={reassignDlg?.kind==="card"} title="Mover lançamentos e excluir cartão" icon="💳" tone="coral"
+        message={`Este cartão tem ${reassignDlg?.count||0} lançamento(s) vinculado(s). Escolha o cartão de destino: os lançamentos serão movidos (a competência de cada um é recalculada pelo ciclo de fechamento do destino) e o cartão será excluído.`}
+        confirmLabel="Mover e excluir" confirmDisabled={!reassignDlg?.target} colors={C}
+        onCancel={()=>setReassignDlg(null)}
+        onConfirm={()=>{ const res=reassignAndDeleteCard(reassignDlg.id, reassignDlg.target); if(!res.ok){ setReassignDlg(d=>({...d, error: reassignReasonMsg[res.reason]||"Não foi possível mover os lançamentos."})); return; } setReassignDlg(null); setEditCardId(null); }}
+      >
+        <div style={lbl2}>Cartão de destino</div>
+        <select style={inp2} value={reassignDlg?.target||""} onChange={e=>setReassignDlg(d=>({...d, target:e.target.value, error:""}))}>
+          <option value="">Selecione</option>
+          {cards.filter(c=>c.id!==reassignDlg?.id).map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+        </select>
+        {reassignDlg?.error&&<div style={{ color:C.coral, fontSize:12, marginTop:8 }}>⚠️ {reassignDlg.error}</div>}
+      </ConfirmDialog>
+
+      {/* v0.3.32 — Diálogo mover-e-excluir conta */}
+      <ConfirmDialog
+        open={reassignDlg?.kind==="account"} title="Mover lançamentos e excluir conta" icon="🏦" tone="coral"
+        message={`Esta conta tem ${reassignDlg?.count||0} lançamento(s) vinculado(s). Escolha a conta de destino: os lançamentos (e cartões/faturas que pagavam por esta conta) serão repontados para ela e a conta será excluída.`}
+        confirmLabel="Mover e excluir" confirmDisabled={!reassignDlg?.target} colors={C}
+        onCancel={()=>setReassignDlg(null)}
+        onConfirm={()=>{ const res=reassignAndDeleteAccount(reassignDlg.id, reassignDlg.target); if(!res.ok){ setReassignDlg(d=>({...d, error: reassignReasonMsg[res.reason]||"Não foi possível mover os lançamentos."})); return; } setReassignDlg(null); }}
+      >
+        <div style={lbl2}>Conta de destino</div>
+        <select style={inp2} value={reassignDlg?.target||""} onChange={e=>setReassignDlg(d=>({...d, target:e.target.value, error:""}))}>
+          <option value="">Selecione</option>
+          {contas.filter(c=>c.id!==reassignDlg?.id).map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+        </select>
+        {reassignDlg?.error&&<div style={{ color:C.coral, fontSize:12, marginTop:8 }}>⚠️ {reassignDlg.error}</div>}
+      </ConfirmDialog>
+
+      {/* v0.3.32 — Diálogo recategorizar categoria por completo */}
+      <ConfirmDialog
+        open={!!recatDlg} title="Recategorizar categoria por completo" icon="↦" tone="gold"
+        message={`Mover todos os lançamentos e despesas compartilhadas de "${recatDlg?.fromNome}" (e subcategorias) para outra categoria. A categoria de origem não é excluída.`}
+        confirmLabel="Recategorizar" confirmDisabled={!recatDlg?.target} colors={C}
+        onCancel={()=>setRecatDlg(null)}
+        onConfirm={()=>{ const res=recategorizeWholeCat(recatDlg.fromId, recatDlg.target); if(!res.ok){ setRecatDlg(d=>({...d, error:"Escolha uma categoria de destino diferente (não pode ser a própria origem ou uma subcategoria dela)."})); return; } setRecatDlg(null); }}
+      >
+        <div style={lbl2}>Categoria de destino</div>
+        <select style={inp2} value={recatDlg?.target||""} onChange={e=>setRecatDlg(d=>({...d, target:e.target.value, error:""}))}>
+          <option value="">Selecione</option>
+          {flatCats.filter(f=>!f.hasSubs&&f.id!==recatDlg?.fromId).map(f=><option key={f.id} value={f.id}>{f.path||f.nome}</option>)}
+        </select>
+        {recatDlg?.error&&<div style={{ color:C.coral, fontSize:12, marginTop:8 }}>⚠️ {recatDlg.error}</div>}
+      </ConfirmDialog>
+
+      {/* v0.3.32 — Confirmação simples reutilizável */}
+      <ConfirmDialog
+        open={!!confirmDlg} title={confirmDlg?.title} message={confirmDlg?.message}
+        tone={confirmDlg?.tone||"coral"} confirmLabel={confirmDlg?.confirmLabel||"Excluir"}
+        cancelLabel={confirmDlg?.cancelLabel} colors={C}
+        onCancel={()=>setConfirmDlg(null)} onConfirm={()=>confirmDlg?.onConfirm?.()}
+      />
+
       <div style={{ display:"flex", gap:4 }}>
         {[{id:"cats",l:"🏷️ Categorias"},{id:"auto",l:"🤖 Autocategorização"},{id:"cards",l:"💳 Cartões"},{id:"contas",l:"🏦 Contas"},{id:"geral",l:"⚙️ Geral"},{id:"dados",l:"💿 Dados"}].map(s=>(
           <button key={s.id} onClick={()=>setSection(s.id)} style={{ background:section===s.id?C.border:"transparent", border:"none", color:section===s.id?C.text:C.soft, padding:"8px 16px", borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>{s.l}</button>
@@ -1849,13 +1916,13 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                     <button onClick={()=>setEditCardId(null)} style={btn2(C.emerald,{ flex:1 })}>✓ Salvar</button>
                     <button onClick={()=>{
                       const dep = cardDependents(c.id);
-                      const parts = [];
-                      if (dep.lanc) parts.push(`${dep.lanc} lançamento(s)`);
-                      if (dep.fat) parts.push(`${dep.fat} fatura(s)`);
-                      if (dep.comp) parts.push(`${dep.comp} despesa(s) compartilhada(s)`);
-                      if (dep.sim) parts.push(`${dep.sim} simulação(ões)`);
-                      if (parts.length) { alert(`Não é possível excluir. Existem ${parts.join(", ")} vinculados a este cartão. Transfira ou remova esses registros antes de excluir.`); return; }
-                      if(window.confirm("Excluir cartão?")){ setCards(p=>p.filter(x=>x.id!==c.id)); setEditCardId(null); }
+                      const vinculados = dep.lanc + dep.comp + dep.sim;
+                      if (vinculados > 0) {
+                        // Há registros vinculados: abre o fluxo de mover-e-excluir.
+                        setReassignDlg({ kind:"card", id:c.id, count:dep.lanc, target:"", error:"" });
+                        return;
+                      }
+                      setConfirmDlg({ title:"Excluir cartão", message:`Excluir o cartão "${c.nome}"?`, tone:"coral", onConfirm:()=>{ setCards(p=>p.filter(x=>x.id!==c.id)); setEditCardId(null); setConfirmDlg(null); } });
                     }} style={btn2(C.coral,{ flex:1 })}>Excluir</button>
                   </div>
                 </div>
@@ -1961,14 +2028,13 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
                     </div>
                   </div>
                   <button onClick={()=>{
-                    if(contas.length<=1) return;
+                    if(contas.length<=1){ setConfirmDlg({ title:"Não é possível excluir", message:"É necessário manter ao menos uma conta cadastrada.", tone:"gold", confirmLabel:"Entendi", cancelLabel:"", onConfirm:()=>setConfirmDlg(null) }); return; }
                     const dep = contaDependents(ct.id);
-                    const parts = [];
-                    if (dep.lanc) parts.push(`${dep.lanc} lançamento(s)`);
-                    if (dep.cartoesVinc) parts.push(`${dep.cartoesVinc} cartão(ões) vinculado(s)`);
-                    if (dep.fat) parts.push(`${dep.fat} fatura(s)`);
-                    if (parts.length) { alert(`Não é possível excluir. Existem ${parts.join(", ")} usando esta conta. Transfira ou remova esses registros antes de excluir.`); return; }
-                    if(window.confirm("Excluir conta?")) setContas(p=>p.filter(c=>c.id!==ct.id));
+                    if (dep.lanc + dep.cartoesVinc + dep.fat > 0) {
+                      setReassignDlg({ kind:"account", id:ct.id, count:dep.lanc, target:"", error:"" });
+                      return;
+                    }
+                    setConfirmDlg({ title:"Excluir conta", message:`Excluir a conta "${ct.nome}"?`, tone:"coral", onConfirm:()=>{ setContas(p=>p.filter(c=>c.id!==ct.id)); setConfirmDlg(null); } });
                   }} style={{ background:C.coral+"22", border:"none", borderRadius:5, color:C.coral, padding:"4px 9px", cursor:"pointer", fontSize:12 }}>Remover</button>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -2064,6 +2130,7 @@ export default function App() {
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
   const [sims,     setSims]     = useLS("simulacoes", []);
+  const { toasts, pushToast, dismissToast } = useToasts();
   const [simForm,  setSimForm]  = useState({ modoParc:"total", parcelas:"" });
   const [showContaForm, setShowContaForm] = useState(false);
   const [novaContaForm, setNovaContaForm] = useState({ nome:"", tipo:"corrente" });
@@ -2817,6 +2884,67 @@ export default function App() {
     cartoesVinc: cards.filter(cd=>getCardPaymentAccountId(cd)===contaId).length,
     fat: faturas.filter(f=>f.accountId===contaId||f.contaPagamentoId===contaId).length,
   });
+
+  // v0.3.32 — Reatribuição em massa (mover lançamentos antes de excluir) +
+  // recategorização de categoria inteira. Toda mutação passa pelo serviço puro
+  // reassignmentService (snapshot completo, operação atômica) e por um toast com
+  // undo que restaura o snapshot anterior.
+  const REASSIGN_REASON_MSG = {
+    source_invoice_closed: "Este cartão tem fatura fechada. Reabra a(s) fatura(s) antes de mover os lançamentos.",
+    dest_invoice_closed: "Os lançamentos cairiam numa fatura já fechada do cartão de destino. Reabra-a antes de mover.",
+    card_not_found: "Cartão de destino inválido.",
+    account_not_found: "Conta de destino inválida.",
+    same_card: "Escolha um cartão de destino diferente.",
+    same_account: "Escolha uma conta de destino diferente.",
+  };
+
+  // Move os lançamentos do cartão `fromId` para `toId` e exclui o cartão de
+  // origem. Retorna o resultado do serviço (para a UI exibir o motivo de bloqueio).
+  const reassignAndDeleteCard = (fromId, toId) => {
+    const res = moveCardTransactions({ trans, faturas, despPess, sims, cards }, { fromCardId: fromId, toCardId: toId });
+    if (!res.ok) return res;
+    const before = { trans, faturas, despPess, sims, cards };
+    const toNome = cards.find(c=>c.id===toId)?.nome || "cartão";
+    setTrans(res.trans); setFaturas(res.faturas); setDespPess(res.despPess); setSims(res.sims);
+    setCards(cards.filter(c=>c.id!==fromId));
+    pushToast({
+      message: `${res.moved} lançamento(s) movido(s) para ${toNome} e cartão excluído.`,
+      onUndo: () => { setTrans(before.trans); setFaturas(before.faturas); setDespPess(before.despPess); setSims(before.sims); setCards(before.cards); },
+    });
+    return res;
+  };
+
+  // Move os lançamentos da conta `fromId` para `toId` e exclui a conta de origem.
+  const reassignAndDeleteAccount = (fromId, toId) => {
+    const res = moveAccountTransactions({ trans, cards, faturas, contas }, { fromAccountId: fromId, toAccountId: toId });
+    if (!res.ok) return res;
+    const before = { trans, cards, faturas, contas };
+    const toNome = contas.find(c=>c.id===toId)?.nome || "conta";
+    setTrans(res.trans); setCards(res.cards); setFaturas(res.faturas);
+    setContas(contas.filter(c=>c.id!==fromId));
+    pushToast({
+      message: `${res.moved} lançamento(s) movido(s) para ${toNome} e conta excluída.`,
+      onUndo: () => { setTrans(before.trans); setCards(before.cards); setFaturas(before.faturas); setContas(before.contas); },
+    });
+    return res;
+  };
+
+  // Recategoriza por completo: move todos os lançamentos/despesas de `fromCatId`
+  // (e descendentes) para `toCatId`. A categoria de origem permanece (o usuário
+  // decide depois se a exclui).
+  const recategorizeWholeCat = (fromCatId, toCatId) => {
+    const fromCatIds = collectCatAndDescendantIds(cats, fromCatId);
+    const res = recategorizeCategory({ trans, despPess }, { fromCatIds, toCatId });
+    if (!res.ok) return res;
+    const before = { trans, despPess };
+    const toNome = flatCats.find(f=>f.id===toCatId)?.nome || "categoria";
+    setTrans(res.trans); setDespPess(res.despPess);
+    pushToast({
+      message: `${res.moved} lançamento(s) recategorizado(s) para ${toNome}.`,
+      onUndo: () => { setTrans(before.trans); setDespPess(before.despPess); },
+    });
+    return res;
+  };
 
   // Import
   const categorizeImportRow=(desc,tipo="despesa")=>guessCategoryForTransaction({
@@ -4304,12 +4432,14 @@ export default function App() {
         )}
 
         {/* PARÂMETROS */}
-        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} onExport={handleExport} onImport={handleImport} onReset={handleReset}/>}
+        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} reassignAndDeleteCard={reassignAndDeleteCard} reassignAndDeleteAccount={reassignAndDeleteAccount} recategorizeWholeCat={recategorizeWholeCat} reassignReasonMsg={REASSIGN_REASON_MSG} onExport={handleExport} onImport={handleImport} onReset={handleReset}/>}
 
         </div>
       </div>
 
       <RequiredFieldModal info={requiredModal} onClose={()=>setRequiredModal(null)} />
+
+      <ToastHost toasts={toasts} onDismiss={dismissToast} onUndo={(t)=>t.onUndo&&t.onUndo()} colors={C} />
 
       {/* MODAL */}
       {modal&&(

@@ -1436,3 +1436,71 @@ Nenhum. Adição de infraestrutura de teste/CI, sem tocar dado persistido.
 ### Impacto em regra de negócio
 
 Nenhum. Nenhuma RN alterada.
+
+## DEC-0033 — Reatribuição em massa (mover antes de excluir) e UX dialogs
+
+Data: 2026-07-08
+
+### Contexto
+
+Desde `DEC-0028` (v0.3.26.9), excluir um cartão/conta/categoria em uso é
+apenas BLOQUEADO, com a mensagem "transfira antes de excluir" — mas a
+transferência não existia. O usuário confirmou (2026-07-08) que precisa
+efetivamente MOVER lançamentos entre cartões e entre contas, e recategorizar
+uma categoria por completo (trocas pontuais por lançamento já existem). Em
+paralelo, os fluxos destrutivos usavam `window.confirm`/`alert` nativos, sem
+feedback reversível.
+
+### Decisão
+
+1. **Serviço puro atômico** `reassignmentService.js` com `moveCardTransactions`,
+   `moveAccountTransactions` e `recategorizeCategory`, cada um devolvendo o
+   snapshot completo (padrão `cardInvoiceOperations`), aplicado de uma vez.
+2. **Gatilho: em massa no fluxo de exclusão** (escolha do usuário). Ao excluir
+   cartão/conta em uso, um diálogo oferece o destino e faz mover-e-excluir.
+   Recategorização por completo fica num botão `↦` próprio por categoria.
+3. **Competência ao mover cartão: recalculada pelo ciclo do destino** (escolha
+   do usuário), via `getCardInvoiceCompetence` (RN012). O movimento é
+   BLOQUEADO se houver fatura fechada envolvida (origem ou destino) — não se
+   altera fatura fechada silenciosamente. Pagamento de fatura
+   (`natureza:"fatura_cartao"`, origem "corrente") não é movido como compra.
+4. **UX: ConfirmDialog reutilizável + toast com Desfazer**, capturando o
+   snapshot anterior para restaurar a ação.
+
+### Alternativas avaliadas
+
+- **Manter só o bloqueio de `DEC-0028`.** Descartada: o usuário pediu
+  explicitamente a reatribuição.
+- **Mover por lançamento individual (na aba Lançamentos).** Descartada como
+  gatilho principal: o usuário escolheu o fluxo em massa no excluir, que
+  resolve diretamente o "mover antes de excluir". Pode ser adicionado depois.
+- **Manter a mesma competência ao mover entre cartões.** Descartada: cartões
+  têm dias de fechamento diferentes; manter a competência colocaria o
+  lançamento numa fatura que não corresponde ao ciclo real do destino.
+
+### Consequências positivas
+
+- Exclusão de cartão/conta em uso deixa de ser um beco sem saída.
+- Toda mutação é atômica e reversível (undo), reduzindo risco de erro do
+  usuário.
+- `ConfirmDialog`/`Toast` ficam disponíveis para padronizar outros fluxos.
+
+### Consequências negativas ou riscos
+
+- A reatribuição de cartão recusa (por ora) casos com fatura fechada — o
+  usuário precisa reabrir a fatura antes. É o comportamento seguro (RN012),
+  mas exige um passo extra nesses casos.
+- Mover despesas compartilhadas/simulações apenas reponta o cartão (mantém a
+  competência manual própria), o que é adequado por não serem itens de fatura
+  calculada, mas difere do recálculo aplicado às compras.
+
+### Impacto em LocalStorage
+
+Nenhum. Sem chave/prefixo/schema novo. Apenas reatribuição de campos já
+existentes em registros existentes, pela fronteira normal de persistência.
+
+### Impacto em regra de negócio
+
+Respeita RN012 (isolamento de fatura) no recálculo de competência e no
+bloqueio de fatura fechada. Não altera o comportamento de nenhuma RN
+existente — adiciona um caminho novo (mover) onde antes só havia bloqueio.

@@ -885,39 +885,40 @@ reduzir risco técnico, facilitar evolução, melhorar UX).
   descartados no `confirmImport`) — corrigido via memo `impSelectedForImport`
   e helper compartilhado `isCardCreditDiscardedOnImport`.
 
-### v0.3.32 — Reatribuição de lançamentos e consolidação de UX
+### v0.3.32 — Reatribuição de lançamentos e consolidação de UX — ENTREGUE (2026-07-08)
 
-**Reatribuição (confirmado pelo usuário em 2026-07-08 como importante — desfaz
-o "ADIADO" do item 4 da v0.3.31):**
+Branch `feature/v0.3.32-reatribuicao-lancamentos`, para mergear em `develop`
+após aprovação da v0.3.31. Ver `DEC-0033`.
 
-- [ ] Permitir **mover lançamentos entre cartões** antes de excluir um cartão
-  em uso (hoje só há o bloqueio simples de `DEC-0028`). O usuário confirmou
-  que precisa reatribuir, não só ser bloqueado.
-- [ ] Permitir **mover lançamentos entre contas** de forma análoga.
-- [ ] Impacto a validar antes de codificar: mover lançamento de cartão altera
-  competência/fatura de destino (RN012/isolamento de fatura); mover entre
-  contas altera saldo das duas contas. Operação **atômica** obrigatória
-  (snapshot completo, padrão `cardInvoiceOperations.js`) — nunca escrita
-  parcial. Consultar `especialista-financas` e `arquiteto-operacoes-atomicas`.
-- [ ] **Recategorizar uma categoria por completo**: mover todos os
-  lançamentos de uma categoria para outra de uma vez (ex.: ao aposentar uma
-  categoria). Trocas pontuais por lançamento **já existem** e não fazem parte
-  deste item — aqui é a operação em massa por categoria.
+**Reatribuição:**
+
+- [x] Mover **lançamentos entre cartões** antes de excluir (diálogo
+  mover-e-excluir; competência recalculada pelo ciclo do destino — RN012).
+- [x] Mover **lançamentos entre contas** de forma análoga (reponta cartões e
+  faturas vinculados à conta).
+- [x] Operação **atômica** via `src/services/reassignmentService.js` (snapshot
+  completo), com guardrail de fatura fechada (origem/destino).
+- [x] **Recategorizar uma categoria por completo** (botão `↦`), movendo todos
+  os lançamentos/despesas dela e subcategorias. Trocas pontuais por
+  lançamento seguem existindo, inalteradas.
 
 **Consolidação de UX (dialogs e feedback):**
 
-- [ ] Criar `ConfirmDialog` reutilizável substituindo os `window.confirm`/
-  `alert` nativos espalhados pelo `App.jsx` — inclui os diálogos já
-  existentes (`delPessoa`, `delDivida`, `delCat`, bloqueios de exclusão de
-  cartão/conta/categoria) e os novos desta sessão (exclusão de dívida
-  órfã, confirmações da importação de cartão).
-- [ ] Criar toast com undo para substituir feedback silencioso em ações
-  destrutivas (exclusão de dívida, desfazer lote importado).
+- [x] `ConfirmDialog` reutilizável (`src/components/ui/ConfirmDialog.jsx`)
+  aplicado aos fluxos de exclusão de cartão, conta e categoria em Parâmetros.
+- [x] Toast com **Desfazer** (`src/components/ui/Toast.jsx`) para as ações de
+  mover/excluir, restaurando o snapshot anterior.
+
+**Não incluído nesta versão (fica no backlog):**
+
+- [ ] Substituir os demais `window.confirm`/`alert` nativos ainda espalhados
+  pelo `App.jsx` (ex. `delPessoa`, `delDivida`, desfazer lote importado) pelo
+  novo `ConfirmDialog`/toast — nesta versão só os fluxos de exclusão de
+  cartão/conta/categoria foram migrados.
+- [ ] Mover lançamento individual pela aba Lançamentos (gatilho alternativo;
+  o usuário escolheu o fluxo em massa no excluir para esta versão).
 - [ ] Revisar textos de ajuda da classificação de crédito de cartão com
-  base em mais casos reais, se o usuário fornecer novos arquivos de
-  teste — o rótulo "Estorno de juros" já foi ajustado nesta sessão a
-  partir de um caso real; pode haver outras variações (ex. estorno de
-  produto) que mereçam um texto próprio.
+  base em mais casos reais, se o usuário fornecer novos arquivos de teste.
 
 ### v0.3.33 — Performance e cálculo
 
