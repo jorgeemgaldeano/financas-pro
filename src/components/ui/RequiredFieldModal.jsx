@@ -1,14 +1,4 @@
-const DEFAULT_COLORS = {
-  navy: "#0F1E36",
-  surface: "#162640",
-  border: "#1E3050",
-  emerald: "#00A878",
-  coral: "#E8504A",
-  gold: "#F5B700",
-  muted: "#4A6380",
-  text: "#E8EDF4",
-  soft: "#8FA8C0",
-};
+import { THEME as DEFAULT_COLORS } from "../../constants/theme.js";
 
 export function requiredFieldInfo(nomeCampo, fieldKey) {
   return {

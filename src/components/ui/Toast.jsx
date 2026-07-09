@@ -5,16 +5,7 @@
 // silenciosas. O undo restaura um snapshot capturado ANTES da ação.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-
-const DEFAULT_COLORS = {
-  surface: "#162640",
-  border: "#1E3050",
-  emerald: "#00A878",
-  coral: "#E8504A",
-  gold: "#F5B700",
-  text: "#E8EDF4",
-  soft: "#8FA8C0",
-};
+import { THEME as DEFAULT_COLORS } from "../../constants/theme.js";
 
 let toastSeq = 0;
 

@@ -947,17 +947,25 @@ afeta o saldo das contas envolvidas.
 
 **Escopo funcional (decisão do usuário: manual + auto-detecção na importação):**
 
-- [ ] Criar transferência manual: escolher conta origem, conta destino, valor
+- [x] Criar transferência manual: escolher conta origem, conta destino, valor
   e data → gera o par ligado atomicamente (padrão snapshot completo).
-- [ ] Desfazer/editar transferência tratando as duas pernas como uma unidade.
-- [ ] Auto-detectar na importação: débito numa conta cadastrada que casa com
-  crédito em outra (mesmo valor, janela de dias — reusar
-  `params.duplaEntradaDias`), oferecendo vincular como transferência na
-  prévia. Não vincular automaticamente sem confirmação.
-- [ ] Exibir transferências de forma distinta na aba Lançamentos (não como
-  entrada/saída) e garantir que filtros e saldos batam.
-- [ ] Incluir no backup/restauração (as pernas já são `trans`, então cobertas;
-  validar que o `transferId` sobrevive ao ciclo).
+  (`createTransfer` + modal ⇄ Nova Transferência.)
+- [x] Desfazer transferência tratando as duas pernas como uma unidade
+  (`removeTransfer` para criadas, `unlinkTransfer`/desvincular para vínculos).
+  Editar in-place (valor/data) fica como refinamento futuro — hoje é
+  excluir/desvincular e recriar.
+- [x] Auto-detectar na importação: débito numa conta cadastrada que casa com
+  crédito em outra (mesmo valor, janela de dias — reusa
+  `params.duplaEntradaDias`), oferecido em diálogo. Não vincula
+  automaticamente sem confirmação. (`detectTransferCandidates`.)
+- [x] Exibir transferências de forma distinta na aba Lançamentos (badge
+  ⇄ saída/entrada · conta) + ação Associar/Desvincular por linha.
+- [x] Incluir no backup/restauração — pernas são `trans`; validado por
+  caracterização (`transferBackup.test.js`) que `transferId`/`transferOrigin`
+  sobrevivem ao ciclo.
+- [x] Associar dois lançamentos JÁ existentes como transferência (pedido do
+  usuário, 2026-07-08): `linkAsTransfer`/`unlinkTransfer` + seletor de
+  contraparte (mesmo valor, conta diferente).
 
 **Riscos:** mudança transversal na agregação (maior risco da versão);
 consultar `especialista-financas` (RN de saldo/previsto-realizado) e
@@ -969,16 +977,39 @@ consultar `especialista-financas` (RN de saldo/previsto-realizado) e
 testada (caracterização antes de cada extração), sem misturar refatoração e
 mudança de regra no mesmo passo:
 
-- [ ] Extrair a agregação contábil para `src/services/accountingService.js`
-  (ex.: `isMovimentoContabil`, `somaReceitas`, `somaDespesas`) — vira o **ponto
-  único** onde a exclusão de `natureza:"transferencia"` é aplicada, tanto no
-  `App.jsx` quanto no `projectionService`. Testes de caracterização primeiro.
+- [x] Extrair a agregação contábil para `src/services/accountingService.js`
+  (`isMovimentoContabil`, `somaReceitas`, `somaDespesas`) — ponto **único** de
+  exclusão de `natureza:"transferencia"`, no `App.jsx` e no
+  `projectionService`. Caracterização primeiro (feito).
 - [ ] Aproveitar para extrair 1–2 blocos inline grandes que a feature
   encostar (candidatos: `ParamsTab`, aba de importação, Dashboard) para
   arquivos próprios em `src/components/`, sem alterar comportamento.
-- [ ] Meta desta versão: reduzir `App.jsx` (~4.700 linhas) e baratear
-  leitura/edição futura. O restante da modularização estrutural segue na
+  **Pendente** — não feito nesta leva para não misturar refactor estrutural
+  com a feature; a lógica de transferência já saiu para `transferService.js`.
+- [ ] Meta desta versão: reduzir `App.jsx` (~4.700 linhas). Parcial: a
+  lógica nova ficou em serviços (`accounting`/`transfer`), mas a UI
+  (modais/diálogos) cresceu o `App.jsx`. Extração de blocos inline segue na
   v0.3.37.
+
+**Pendência de UX identificada pelo usuário em sessão 2026-07-09:**
+
+- [x] **Clareza do reflexo da transferência.** Resolvido em 2026-07-09 com
+  `especialista-financas` + `revisor-ux` consultados antes de codificar.
+  Diagnóstico: a coluna Categoria exibia um badge cinza quebrado (📦, sem
+  texto) mais um botão "Editar" sem sentido para pernas de transferência
+  (`catId:null`). Implementado: `renderCategoryEditor` (`App.jsx` ~linha
+  3385) trata `t.natureza==="transferencia"` como caso especial e renderiza
+  o badge dourado "⇄ Transferência · saída/entrada" na própria coluna
+  Categoria, sem botão Editar. **Rótulo derivado, não persistido** — nasce de
+  `natureza`, que já existe; nenhuma pseudo-categoria foi criada em `cats`,
+  logo sem risco de vazar para `CategorySelect`, filtros ou gráficos por
+  categoria, e sem necessidade de migração. Verificado no preview (badge
+  dourado nas duas pernas, sem botão Editar).
+  Escopo **não** incluído nesta leva (avaliado, mas fora da decisão do
+  usuário 2026-07-09): opção sintética "Transferência" no filtro de
+  Categoria principal, e formalização de RN031 (transferência como
+  movimento nulo) em `docs/02-REGRAS-DE-NEGOCIO.md` — ambos ficam como
+  débito técnico para retomar se necessário.
 
 ### v0.3.34 — Cofrinhos (objetivos de poupança)
 
@@ -1069,3 +1100,45 @@ existente; adiciona entidade nova.
   Pluxee.
 - [ ] Testes de integração leves com `@testing-library/react`.
 - [ ] Smoke test E2E (Playwright) cobrindo o checklist de fatura.
+
+### Melhorias de tooling/processo — revisão de agentes/skills (sessão 2026-07-09)
+
+Levantamento pedido pelo usuário sobre necessidade de novos agentes/skills e
+pontos de performance de sessão. Nenhum item foi implementado ainda — só
+registrado para priorização futura.
+
+- [ ] **Agente `otimizador-react` (novo).** Já cogitado em `DEC` de
+  36-DECISAO-AGENTES-CLAUDE-CODE.md ("Itens em aberto") e nunca criado.
+  Nenhum dos 7 agentes atuais cobre performance de render/bundle — cobriria
+  a complexidade quadrática do saldo e a auditoria de `useMemo`/`useCallback`
+  já mapeadas na v0.3.35, e o code-splitting do `pdfjs-dist` (sem
+  `vite.config.js` hoje, bundle default do Vite).
+- [ ] **Hook de teste automático pós-edição.** Rodar `npm test` via hook
+  `PostToolUse` do Claude Code ao editar `src/services/*.js` — item também já
+  citado como aberto na mesma DEC-036 e nunca implementado. Pega regressão de
+  service sem depender de lembrete manual.
+- [ ] **Serviços sem teste dedicado.** `cardInstallmentService.js` (587
+  linhas, o maior service do projeto), `importService.js` (626 linhas),
+  `projectionService.js`, `financeRepository.js`, `categoryService.js`,
+  `transactionNormalizer.js`, `moneyUtils.js`, `dateUtils.js` — nenhum tem
+  arquivo de teste próprio em `tests/`. Prioridade sugerida: os dois maiores
+  primeiro (`cardInstallmentService`, `importService`), por concentrarem mais
+  regra de negócio (RN de parcelamento e importação).
+- [ ] **Inconsistência entre CLAUDE.md e realidade — E2E Playwright.** O
+  CLAUDE.md declara a pirâmide "unitário → integração → E2E com Playwright →
+  CI", mas não há nenhum spec Playwright, a dependência não está instalada e
+  o `ci.yml` só roda Vitest + build. Decidir entre implementar de fato (1–2
+  smoke tests reais, ex. checklist de fatura, já listado acima no backlog) ou
+  ajustar o texto do CLAUDE.md para refletir o estado atual até haver
+  bandwidth.
+
+### Ajuste visual — paleta de cores (sessão 2026-07-09)
+
+- [ ] **Usuário relata que a aplicação está com cores muito escuras** e pediu
+  um ajuste para deixar mais clara. Ainda não analisado tecnicamente — a
+  paleta hoje vive no objeto `C` no topo do `App.jsx` (`navy`, `surface`,
+  `border`, `emerald`, `coral`, `gold`, `muted`, `text`, `soft`), usada como
+  tema único (não há alternância clara/escura hoje). Próxima sessão: abrir com
+  o usuário se é (a) só clarear os tons de fundo mantendo tema escuro, ou
+  (b) introduzir um tema claro alternável — impacto e escopo são bem
+  diferentes. Consultar `revisor-ux` antes de mudar qualquer cor.

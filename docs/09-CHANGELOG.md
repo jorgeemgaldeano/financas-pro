@@ -1424,3 +1424,67 @@ sem campo novo e sem alteração de LocalStorage. Fecha itens do backlog
   condiciona a implementação a avaliar antes se o bloqueio simples atual
   incomoda o usuário — é feature nova, não limpeza técnica. Fica para
   decisão do usuário.
+
+
+## [0.3.33.0] - 2026-07-08
+
+Transferências entre contas. Ver `DEC-0034`.
+
+### Adicionado
+
+- **Transferência entre contas** como movimento nulo contábil: uma
+  transferência = duas transações ligadas por `transferId`, ambas
+  `natureza:"transferencia"` (saída/despesa na origem, entrada/receita no
+  destino). Não conta como receita nem despesa; só afeta o saldo das contas.
+- `src/services/accountingService.js` — ponto ÚNICO de agregação contábil
+  (`isMovimentoContabil`, `isReceitaContabil`, `isDespesaContabil`,
+  `somaReceitas`, `somaDespesas`). Centraliza a exclusão de
+  `natureza:"transferencia"` das somas de receita/despesa.
+- `src/services/transferService.js` — operações PURAS (padrão snapshot
+  completo): `createTransfer` (par novo), `linkAsTransfer`/`unlinkTransfer`
+  (associar/desassociar lançamentos já existentes), `removeTransfer`
+  (excluir o par), `isTransferEligible`, `findTransferCandidates` e
+  `detectTransferCandidates` (auto-detecção na importação).
+- UI: botão **⇄ Nova Transferência** e modal na aba Lançamentos; ação
+  **⇄ Associar** por linha (com seletor da contraparte de mesmo valor/conta
+  diferente); badge de transferência na lista; diálogo **⇄ Transferências
+  detectadas** após importar extrato bancário/vale.
+
+### Alterado
+
+- ~10 pontos de agregação P&L (Dashboard, gasto por categoria, tendência
+  6 meses, `projectionService`) passaram a excluir transferência via
+  `accountingService`. Sites de **saldo/fluxo por conta**
+  (`movimentoContaMes`, entradas/saídas por conta) foram deliberadamente
+  mantidos incluindo as duas pernas (a transferência é caixa real da conta).
+- `confirmImport` (bancário/vale) constrói os lançamentos com id antes de
+  gravar e roda a auto-detecção de transferências, usando a janela
+  `params.duplaEntradaDias`. Importação normal preservada.
+- Versão visual atualizada para `v0.3.33.0-dev`.
+
+### Corrigido
+
+- Não aplicável (feature nova; nenhum número existente muda para quem não
+  usa transferência — travado por caracterização no `accountingService`).
+
+### Removido
+
+- Não aplicável.
+
+### Migração
+
+- **Nenhuma.** Aditivo por ausência (RN002): os campos novos (`transferId`,
+  `transferOrigin`, `transferContraContaId` e `natureza:"transferencia"`) só
+  existem em transferências; dados antigos não os têm e seguem como movimento
+  contábil normal. Sem chave nova, sem bump de `LS_VERSION`. Backup/restauração
+  cobre as pernas (já são `trans`) — validado por caracterização.
+
+### Testes
+
+- `npm test` (Vitest): **119/119 passando** (antes: 91/91; +28:
+  `accountingService`, `transferService` — incluindo vínculo, desvínculo e
+  auto-detecção — e `transferBackup` do ciclo de restauração). `npm run build`
+  aprovado (mantém o alerta conhecido de chunk > 500 kB).
+- Verificação no preview (app real): criação manual do par, vínculo de
+  existentes e auto-detecção numa importação de extrato bancário — todos com
+  exclusão correta do P&L e saldo por conta preservado.

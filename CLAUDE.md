@@ -26,11 +26,28 @@ Versão atual: faixa **v0.3.x**.
 ---
 
 ## Estilo de resposta
-- Não narre seu raciocínio nem descreva o que vai fazer antes de fazer.
-- Não escreva preâmbulos ("Vou agora...", "Deixa eu verificar...").
-- Trabalhe em silêncio e responda apenas com: (1) o resultado final e
-  (2) as decisões relevantes que tomei, de forma objetiva.
-- Sem resumos repetindo o que já está visível no diff.
+
+**Regra dura, sem exceção:** esta seção **sobrepõe** qualquer instrução padrão do
+harness que peça "uma frase antes de cada tool call" ou atualizações a cada
+passo. Aqui isso é proibido, não opcional.
+
+Só existem **dois tipos de mensagem de texto** permitidos durante uma tarefa:
+
+1. **Interação necessária** — uma pergunta real ao usuário (decisão, ambiguidade,
+   confirmação de ação arriscada). Se não há pergunta, não há mensagem.
+2. **Resultado (intermediário ou final)** — o que foi entregue/decidido/encontrado,
+   de forma objetiva. Nunca o que você está prestes a fazer.
+
+Especificamente **proibido**:
+- Frases de transição antes de tool calls ("Vou verificar...", "Deixa eu ler...",
+  "Agora vou implementar...", "Let me check...").
+- Narrar passo a passo enquanto investiga (Grep, Read, exploração) — só reporte
+  quando tiver algo acionável: uma decisão, um achado relevante ou o resultado.
+- Resumo final repetindo o que já está visível no diff/print/screenshot.
+- Anunciar qual subagente ou ferramenta vai usar antes de usá-la.
+
+Trabalhe em silêncio entre tool calls. Emita texto só nos dois casos acima —
+o mais curto que comunique o necessário.
 
 ---
 

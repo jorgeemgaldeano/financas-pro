@@ -1504,3 +1504,88 @@ existentes em registros existentes, pela fronteira normal de persistência.
 Respeita RN012 (isolamento de fatura) no recálculo de competência e no
 bloqueio de fatura fechada. Não altera o comportamento de nenhuma RN
 existente — adiciona um caminho novo (mover) onde antes só havia bloqueio.
+
+
+## DEC-0034 — Transferências entre contas como movimento nulo contábil
+
+Data: 2026-07-08
+
+### Contexto
+
+Não havia como representar dinheiro que apenas troca de conta (ex.: corrente →
+poupança, corrente → carteira de vale). O usuário registrava isso como uma
+despesa numa conta e uma receita noutra, o que INFLAVA receitas e despesas do
+household, distorcendo Dashboard e Projeções. O campo `natureza` já existe
+(usado por `fatura_cartao`/`ajuste_fatura_cartao`).
+
+### Decisão
+
+1. **Modelo:** uma transferência = DUAS transações ligadas por `transferId`,
+   ambas `natureza:"transferencia"` — saída (despesa) na origem, entrada
+   (receita) no destino. Campos novos só nas pernas de transferência
+   (`transferId`, `transferOrigin`, `transferContraContaId`). Aditivo por
+   ausência (RN002): sem chave nova, sem bump de `LS_VERSION`.
+2. **Agregação centralizada:** a exclusão de `natureza:"transferencia"` das
+   somas de receita/despesa vive num ponto único, `accountingService.js`
+   (`isMovimentoContabil`/`somaReceitas`/`somaDespesas`), em vez de espalhar
+   por ~40 filtros do App.jsx. Caracterização ANTES travou que os números de
+   quem não usa transferência não mudam.
+3. **Regra household × conta:** a transferência é NEUTRA no P&L do household
+   (Dashboard, gasto por categoria, tendência, Projeções) mas REAL no
+   saldo/fluxo de cada conta (as duas pernas continuam em `movimentoContaMes`
+   e nas entradas/saídas por conta). Consequência aceita: total de despesas do
+   household pode diferir da soma das saídas por conta quando há transferência.
+4. **Escopo funcional:** (a) criação manual do par (serviço puro atômico,
+   padrão snapshot completo); (b) **associar dois lançamentos JÁ existentes**
+   (`linkAsTransfer`) e **desvincular** (`unlinkTransfer`, restaura sem apagar);
+   (c) **auto-detecção na importação** (`detectTransferCandidates`) — importado
+   que casa com existente em outra conta, dentro de `params.duplaEntradaDias`,
+   oferecido em diálogo, nunca vinculado automaticamente.
+5. **Valor igual obrigatório** ao associar/detectar (decisão do usuário,
+   2026-07-08): duas pernas de valores diferentes deixariam a diferença fora do
+   P&L (vazamento contábil). O vínculo é bloqueado se os valores divergem.
+6. **Dois desfazeres distintos:** transferência CRIADA (`transferOrigin:
+   "manual"`) → excluir apaga as duas pernas (`removeTransfer`); transferência
+   por VÍNCULO (`transferOrigin:"vinculo"`) → desvincular preserva os dois
+   lançamentos originais (`unlinkTransfer`).
+7. **Elegibilidade:** exclui cartão, `fatura_cartao`/`ajuste_fatura_cartao`,
+   parcelas e o que já é transferência — pagar fatura é conta→cartão, conceito
+   à parte.
+
+### Alternativas avaliadas
+
+- **Permitir valores diferentes ao associar.** Descartada pelo usuário: quebra
+  a invariante "movimento nulo" e some com taxas/perdas do P&L.
+- **Vincular automaticamente na importação.** Descartada: a auto-detecção só
+  SUGERE; o usuário confirma no diálogo.
+- **Espalhar `natureza !== "transferencia"` nos ~40 filtros.** Descartada:
+  frágil e propenso a drift; centralizado em `accountingService`.
+- **Uma única entidade "transferência" (não duas pernas).** Descartada:
+  quebraria o saldo por conta (cada conta precisa da sua movimentação) e o
+  backup/reuso de `trans`.
+
+### Consequências positivas
+
+- Receitas/despesas do household deixam de ser infladas por troca de conta.
+- A operação-núcleo de vínculo é reusada pela auto-detecção na importação.
+- Backup/restauração cobre transferências sem trabalho extra (pernas são
+  `trans`), validado por caracterização.
+
+### Consequências negativas ou riscos
+
+- Total de despesas do household ≠ soma das saídas por conta quando há
+  transferência (esperado pela regra household × conta — ponto a documentar na
+  ajuda ao usuário).
+- Mudança transversal na agregação foi o maior risco da versão; mitigado por
+  centralização + caracterização antes de rotear os call-sites.
+
+### Impacto em LocalStorage
+
+Nenhum bump de `LS_VERSION`. Campos novos aditivos apenas nas pernas de
+transferência; ausência = movimento contábil normal para dados antigos.
+
+### Impacto em regra de negócio
+
+Não altera nenhuma RN existente. Introduz a regra de exclusão de transferência
+das agregações de receita/despesa (candidata a virar RN própria na numeração de
+`docs/02-REGRAS-DE-NEGOCIO.md`).

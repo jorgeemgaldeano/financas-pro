@@ -5,16 +5,7 @@
 // de um controle extra (ex.: escolher o cartão/conta de destino ao mover
 // lançamentos antes de excluir). Segue o padrão visual de RequiredFieldModal.
 
-const DEFAULT_COLORS = {
-  surface: "#162640",
-  border: "#1E3050",
-  navy: "#0F1E36",
-  emerald: "#00A878",
-  coral: "#E8504A",
-  gold: "#F5B700",
-  text: "#E8EDF4",
-  soft: "#8FA8C0",
-};
+import { THEME as DEFAULT_COLORS } from "../../constants/theme.js";
 
 // props:
 //  open, title, message, icon, children,

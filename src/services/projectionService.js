@@ -1,3 +1,5 @@
+import { isMovimentoContabil } from "./accountingService.js";
+
 function money(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -168,7 +170,7 @@ function recurringTransactionsForMonth({ transactions, monthKey, filters = {} })
 
   const seedsByIdentity = new Map();
   safeTransactions
-    .filter(transaction => transaction?.fixo === true && transaction?.origem !== "cartao" && transaction?.natureza !== "fatura_cartao")
+    .filter(transaction => transaction?.fixo === true && transaction?.origem !== "cartao" && transaction?.natureza !== "fatura_cartao" && isMovimentoContabil(transaction))
     .forEach(transaction => {
       const identity = recurringIdentity(transaction);
       const current = seedsByIdentity.get(identity);
@@ -258,14 +260,15 @@ function buildMonthProjection({
   ];
 
   const receitasItens = monthTransactions
-    .filter(transaction => transaction?.tipo === "receita" && transaction?.origem !== "cartao")
+    .filter(transaction => transaction?.tipo === "receita" && transaction?.origem !== "cartao" && isMovimentoContabil(transaction))
     .filter(transaction => applyDetailFilters(transactionDetail(transaction, "receitas"), "receitas", filters));
 
   const despesasItens = monthTransactions
     .filter(transaction =>
       transaction?.tipo === "despesa" &&
       transaction?.origem !== "cartao" &&
-      transaction?.natureza !== "fatura_cartao"
+      transaction?.natureza !== "fatura_cartao" &&
+      isMovimentoContabil(transaction)
     )
     .filter(transaction => applyDetailFilters(transactionDetail(transaction, "despesas"), "despesas", filters));
 

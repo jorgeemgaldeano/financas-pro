@@ -8,6 +8,7 @@ import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions 
 import { guessCategoryForTransaction, normText } from "./services/categoryService.js";
 import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
 import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
+import { THEME } from "./constants/theme.js";
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
 import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
@@ -15,6 +16,8 @@ import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatM
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
 import { closeInvoice, reopenInvoice, addInvoiceAdjustment, computeCardInvoice, resolveInvoiceCategoryId } from "./services/cardInvoiceOperations.js";
 import { buildProjectionInsights, buildRealCashFlowProjection } from "./services/projectionService.js";
+import { isDespesaContabil, somaReceitas, somaDespesas } from "./services/accountingService.js";
+import { createTransfer, removeTransfer, linkAsTransfer, unlinkTransfer, isTransferEligible, findTransferCandidates, detectTransferCandidates } from "./services/transferService.js";
 import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
 import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
@@ -25,7 +28,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.32.1";
+const APP_VERSION = "0.3.33.0-dev";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -104,7 +107,7 @@ function normalizeBackupPayload(payload) {
     dividas: asArray(read("dividas", ["debts"], [])),
     despPess: asArray(read("despPess", ["sharedExpenses"], [])),
     cards: asArray(read("cards", [], [])),
-    cats: asArray(read("cats", ["categories"], [])),
+    cats: (() => { const raw = read("cats", ["categories"], undefined); return raw === undefined ? undefined : asArray(raw, []); })(),
     params: normalizedParams,
     saldosIniciais: asObject(read("saldosIniciais", ["initialBalances"], {}), {}),
     faturas: asArray(read("faturas", ["invoices"], [])),
@@ -113,11 +116,7 @@ function normalizeBackupPayload(payload) {
   };
 }
 
-const C = {
-  navy:"#0F1E36", surface:"#162640", border:"#1E3050",
-  emerald:"#00A878", coral:"#E8504A", gold:"#F5B700",
-  muted:"#4A6380", text:"#E8EDF4", soft:"#8FA8C0",
-};
+const C = THEME;
 
 const INIT_CATS = [
   { id:"cat1", nome:"Alimentação",  cor:"#00A878", icon:"🍽️", subs:[
@@ -613,7 +612,8 @@ function expandSim(sim, cards = [], faturas = []) {
 // ── CategorySelect com autocomplete
 function CategorySelect({ cats, value, onChange, style, validationInfo, fieldKey = "catId" }) {
   const flat = useMemo(() => flattenCats(cats), [cats]);
-  const selectableCats = useMemo(() => flat.filter(f => !f.hasSubs), [flat]);
+  // v0.3.33.x — categorização permitida em qualquer nível (não só folhas); metas/gráficos continuam agregando pela raiz via findRootCat.
+  const selectableCats = flat;
   const selected = useMemo(() => selectableCats.find(f => f.id === value) || null, [selectableCats, value]);
   const [query, setQuery] = useState(selected?.path || "");
   const [open, setOpen] = useState(false);
@@ -878,11 +878,12 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
     if(!despForm.fixo||!despForm.fixoDia) return [];
     const meses = Math.max(2, parseInt(despForm.fixoMeses)||12);
     const dia = Math.min(Math.max(parseInt(despForm.fixoDia)||1,1),31);
+    const mesInicio = despForm.fixoMesInicio||selMon;
     return Array.from({length:Math.min(4,meses)},(_,i)=>{
-      const mes = addMonthsToMonthKey(selMon, i);
+      const mes = addMonthsToMonthKey(mesInicio, i);
       return { mes, data:dateForMonthDay(mes, dia), valor:moneyToNumber(despForm.valor) };
     });
-  },[despForm.fixo,despForm.fixoDia,despForm.fixoMeses,despForm.valor,selMon]);
+  },[despForm.fixo,despForm.fixoDia,despForm.fixoMeses,despForm.fixoMesInicio,despForm.valor,selMon]);
 
   // Totais globais
   const totalEmAberto   = dividas.filter(d=>d.status==="aberta").reduce((s,d)=>s+pendPorDivida(d),0);
@@ -983,8 +984,9 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
       const meses = Math.max(2, parseInt(despForm.fixoMeses)||12);
       const valor = parseFloat(valorInformado.toFixed(2));
       const grp = uid();
+      const mesInicio = despForm.fixoMesInicio||selMon;
       setDespPess(p=>[...p,...Array.from({length:meses},(_,i)=>{
-        const mes = addMonthsToMonthKey(selMon, i);
+        const mes = addMonthsToMonthKey(mesInicio, i);
         const data = dateForMonthDay(mes, dia);
         return { ...base, id:"dp"+uid(), valor, valorPago:base.status==="pendente"?0:valor, data, competencia:mes,
           parcelado:false, fixo:true, fixoDia:dia, parcela:i+1, totalParcelas:meses, parcelaGrupo:grp };
@@ -1018,7 +1020,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
 
   // Shared styles
   const s = {
-    card2: (x={})=>({ background:"#162640", border:"1px solid #1E3050", borderRadius:12, padding:"16px 18px", ...x }),
+    card2: (x={})=>({ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:"16px 18px", ...x }),
     badge: (col)=>({ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:col+"22", color:col }),
     row: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 },
     tag: (col)=>({ fontSize:11, fontWeight:700, background:col+"22", color:col, padding:"3px 9px", borderRadius:20 }),
@@ -1433,7 +1435,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
 
       {modalHistorico&&(
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:210 }} onClick={e=>e.target===e.currentTarget&&setModalHistorico(false)}>
-          <div style={{ background:"#162640", border:"1px solid #1E3050", borderRadius:14, padding:24, width:760, maxWidth:"94vw", maxHeight:"86vh", overflowY:"auto" }}>
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:24, width:760, maxWidth:"94vw", maxHeight:"86vh", overflowY:"auto" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:14 }}>
               <div>
                 <h3 style={{ margin:"0 0 4px", fontWeight:800 }}>Histórico de despesas compartilhadas</h3>
@@ -1471,7 +1473,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
       {/* ── MODAL: amortização ── */}
       {modalAmort&&(
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }} onClick={e=>e.target===e.currentTarget&&setModalAmort(null)}>
-          <div style={{ background:"#162640", border:"1px solid #1E3050", borderRadius:14, padding:26, width:400, maxWidth:"92vw" }}>
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:26, width:400, maxWidth:"92vw" }}>
             <h3 style={{ margin:"0 0 16px", fontWeight:800 }}>Registrar Pagamento</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:11 }}>
               <div style={{ background:C.navy, borderRadius:8, padding:"10px 13px", fontSize:13 }}>
@@ -1513,7 +1515,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
       {/* ── MODAL: nova dívida ── */}
       {modalDiv&&(
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }} onClick={e=>e.target===e.currentTarget&&setModalDiv(false)}>
-          <div style={{ background:"#162640", border:"1px solid #1E3050", borderRadius:14, padding:26, width:400, maxWidth:"92vw" }}>
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:26, width:400, maxWidth:"92vw" }}>
             <h3 style={{ margin:"0 0 16px", fontWeight:800 }}>Nova Dívida — {pessoa.nome}</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               <div><div style={lbl}>Descrição</div><input style={inp} placeholder="Ex: Empréstimo viagem" value={divForm.descricao} onChange={e=>setDivForm(f=>({...f,descricao:e.target.value}))}/></div>
@@ -1533,7 +1535,7 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
       {/* ── MODAL: novo lançamento compartilhado ── */}
       {modalDesp&&(
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }} onClick={e=>e.target===e.currentTarget&&setModalDesp(false)}>
-          <div style={{ background:"#162640", border:"1px solid #1E3050", borderRadius:14, padding:26, width:560, maxWidth:"94vw", maxHeight:"92vh", overflowY:"auto" }}>
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:26, width:560, maxWidth:"94vw", maxHeight:"92vh", overflowY:"auto" }}>
             <h3 style={{ margin:"0 0 8px", fontWeight:800 }}>Novo Compartilhamento — {pessoa.nome}</h3>
             <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>Cadastre receita ou despesa compartilhada, incluindo parcelas e recorrência usando a mesma lógica dos lançamentos de cartão.</div>
             <div style={{ display:"flex", flexDirection:"column", gap:11 }}>
@@ -1603,15 +1605,16 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
               {!despForm.parcelado&&(
                 <div style={{ background:C.navy, borderRadius:9, padding:"11px 13px" }}>
                   <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, cursor:"pointer", marginBottom:despForm.fixo?12:0 }}>
-                    <input type="checkbox" checked={!!despForm.fixo} onChange={e=>setDespForm(f=>({...f,fixo:e.target.checked,parcelado:e.target.checked?false:f.parcelado,data:e.target.checked?"":(f.data||todayIso())}))}/>
+                    <input type="checkbox" checked={!!despForm.fixo} onChange={e=>setDespForm(f=>({...f,fixo:e.target.checked,parcelado:e.target.checked?false:f.parcelado,data:e.target.checked?"":(f.data||todayIso()),fixoMesInicio:e.target.checked?(f.fixoMesInicio||selMon):f.fixoMesInicio}))}/>
                     <span style={{ fontWeight:600 }}>Despesa/receita fixa recorrente</span>
                   </label>
                   {despForm.fixo?(
                     <>
                       <div style={{ fontSize:12, color:C.soft, marginBottom:10 }}>
-                        Será registrado todo mês no dia informado, a partir de <strong style={{ color:C.text }}>{selMon}</strong>.
+                        Será registrado todo mês no dia informado, a partir do mês inicial escolhido abaixo.
                       </div>
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:9 }}>
+                        <div><div style={lbl}>Mês inicial</div><input style={inp} type="month" value={despForm.fixoMesInicio||selMon} onChange={e=>setDespForm(f=>({...f,fixoMesInicio:e.target.value}))}/></div>
                         <div><div style={lbl}>Dia do mês</div><input style={highlightIfRequired(inp, requiredModal, "despFixoDia")} type="number" min={1} max={31} placeholder="Ex: 5" value={despForm.fixoDia||""} onChange={e=>setDespForm(f=>({...f,fixoDia:e.target.value}))}/></div>
                         <div><div style={lbl}>Nº de meses</div><input style={inp} type="number" min={2} max={60} placeholder="Ex: 12" value={despForm.fixoMeses||""} onChange={e=>setDespForm(f=>({...f,fixoMeses:e.target.value}))}/></div>
                       </div>
@@ -1665,7 +1668,7 @@ function MetaInput({ catId, metas, setMetas, compact=false }) {
   if (editing) {
     return (
       <MoneyInput autoFocus value={buf}
-        style={{ width:compact?80:100, background:"#0F1E36", border:"1px solid #00A878", borderRadius:6, color:"#E8EDF4", padding:"3px 7px", fontSize:13, outline:"none" }}
+        style={{ width:compact?80:100, background:C.navy, border:`1px solid ${C.emerald}`, borderRadius:6, color:C.text, padding:"3px 7px", fontSize:13, outline:"none" }}
         onChange={setBuf}
         onBlur={()=>{ setMetas(p=>({...p,[catId]:moneyToNumber(buf)||0})); setEditing(false); }}
         onKeyDown={e=>{ if(e.key==="Enter"){ setMetas(p=>({...p,[catId]:moneyToNumber(buf)||0})); setEditing(false); } if(e.key==="Escape") setEditing(false); }}
@@ -1675,8 +1678,8 @@ function MetaInput({ catId, metas, setMetas, compact=false }) {
   return (
     <span onClick={()=>{ setBuf(val?val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}):""); setEditing(true); }}
       style={{ minWidth:compact?70:90, display:"inline-block", textAlign:"right", cursor:"pointer", fontWeight:700, fontSize:compact?13:14,
-               color:val>0?"#E8EDF4":"#4A6380", background:val>0?"#1E3050":"transparent",
-               border:"1px solid #1E3050", borderRadius:6, padding:"3px 8px" }}>
+               color:val>0?C.text:C.muted, background:val>0?C.border:"transparent",
+               border:`1px solid ${C.border}`, borderRadius:6, padding:"3px 8px" }}>
       {val>0?val.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}):"Definir"}
     </span>
   );
@@ -1795,7 +1798,7 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
         <div style={lbl2}>Categoria de destino</div>
         <select style={inp2} value={recatDlg?.target||""} onChange={e=>setRecatDlg(d=>({...d, target:e.target.value, error:""}))}>
           <option value="">Selecione</option>
-          {flatCats.filter(f=>!f.hasSubs&&f.id!==recatDlg?.fromId).map(f=><option key={f.id} value={f.id}>{f.path||f.nome}</option>)}
+          {flatCats.filter(f=>f.id!==recatDlg?.fromId).map(f=><option key={f.id} value={f.id}>{f.path||f.nome}</option>)}
         </select>
         {recatDlg?.error&&<div style={{ color:C.coral, fontSize:12, marginTop:8 }}>⚠️ {recatDlg.error}</div>}
       </ConfirmDialog>
@@ -1831,9 +1834,9 @@ function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, d
             <div>{renderNode(cats)}</div>
           </div>
           <div style={card2()}>
-            <div style={{ fontWeight:700, fontSize:14, marginBottom:10 }}>Categorias disponíveis para lançamento ({flatCats.filter(f=>!f.hasSubs).length})</div>
+            <div style={{ fontWeight:700, fontSize:14, marginBottom:10 }}>Categorias disponíveis para lançamento ({flatCats.length})</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-              {flatCats.filter(f=>!f.hasSubs).map(f=>(
+              {flatCats.map(f=>(
                 <span key={f.id} style={{ fontSize:11, background:catColor(cats,f.id)+"22", color:catColor(cats,f.id), padding:"3px 9px", borderRadius:20, fontWeight:600 }}>
                   {catIcon(cats,f.id)} {f.path}
                 </span>
@@ -2148,10 +2151,14 @@ export default function App() {
   const [impDups,  setImpDups]  = useState(new Set());
   const [impIgnored, setImpIgnored] = useState([]);
   const [lastImportReport, setLastImportReport] = useState(null);
+  // v0.3.33 — pares candidatos a transferência detectados após a importação.
+  const [impTransferMatches, setImpTransferMatches] = useState([]);
+  const [impTransferSel, setImpTransferSel] = useState({});
   const [requiredModal, setRequiredModal] = useState(null);
   const [expandedCards, setExpandedCards] = useState({});
   const [expandedAccounts, setExpandedAccounts] = useState({});
   const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editSaldoIniId, setEditSaldoIniId] = useState(null);
   const [transactionFilters, setTransactionFilters] = useState({
     dataInicio: "",
     dataFim: "",
@@ -2236,12 +2243,12 @@ export default function App() {
   }, [trans, selMonth]);
 
   // Receitas/despesas realizadas = valores pagos/baixados. Previstos não impactam saldo realizado.
-  const receitaCorr  = useMemo(()=>monthTrans.filter(t=>t.tipo==="receita"&&t.origem==="corrente").reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
-  const receitaVales = useMemo(()=>monthTrans.filter(t=>t.tipo==="receita"&&(t.origem==="vale_alimentacao"||t.origem==="vale_refeicao")).reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
+  const receitaCorr  = useMemo(()=>somaReceitas(monthTrans.filter(t=>t.origem==="corrente"), valorRealizado),[monthTrans]);
+  const receitaVales = useMemo(()=>somaReceitas(monthTrans.filter(t=>t.origem==="vale_alimentacao"||t.origem==="vale_refeicao"), valorRealizado),[monthTrans]);
   const receitas     = receitaCorr + receitaVales;
 
-  const despCorr  = useMemo(()=>monthTrans.filter(t=>t.tipo==="despesa"&&t.origem==="corrente").reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
-  const despVales = useMemo(()=>monthTrans.filter(t=>t.tipo==="despesa"&&(t.origem==="vale_alimentacao"||t.origem==="vale_refeicao")).reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
+  const despCorr  = useMemo(()=>somaDespesas(monthTrans.filter(t=>t.origem==="corrente"), valorRealizado),[monthTrans]);
+  const despVales = useMemo(()=>somaDespesas(monthTrans.filter(t=>t.origem==="vale_alimentacao"||t.origem==="vale_refeicao"), valorRealizado),[monthTrans]);
   const despCorrTotal = despCorr + despVales;
 
   const saldoInicialTotal = useMemo(()=>contas.reduce((s,c)=>s+getSaldoInicialConta(c, selMonth),0),[contas,getSaldoInicialConta,selMonth]);
@@ -2266,11 +2273,11 @@ export default function App() {
 
   const catBreakdown = useMemo(()=>{
     const map={};
-    monthTrans.filter(t=>t.tipo==="despesa").forEach(t=>{ const root=findRootCat(cats,t.catId)?.nome||"Outros"; map[root]=(map[root]||0)+t.valor; });
+    monthTrans.filter(isDespesaContabil).forEach(t=>{ const root=findRootCat(cats,t.catId)?.nome||"Outros"; map[root]=(map[root]||0)+t.valor; });
     return Object.entries(map).map(([cat,val])=>({ cat,val, color:cats.find(c=>c.nome===cat)?.cor||"#B0BEC5" })).sort((a,b)=>b.val-a.val);
   },[monthTrans,cats]);
 
-  const last6 = useMemo(()=>Array.from({length:6},(_,i)=>{ const dt=new Date(Y,M-5+i,1),k=dt.toISOString().slice(0,7); return { label:MONTHS[dt.getMonth()], value:trans.filter(t=>t.tipo==="despesa"&&transMonthKey(t)===k).reduce((s,t)=>s+t.valor,0) }; }),[trans]);
+  const last6 = useMemo(()=>Array.from({length:6},(_,i)=>{ const dt=new Date(Y,M-5+i,1),k=dt.toISOString().slice(0,7); return { label:MONTHS[dt.getMonth()], value:trans.filter(t=>isDespesaContabil(t)&&transMonthKey(t)===k).reduce((s,t)=>s+t.valor,0) }; }),[trans]);
 
   const cardTotals = useMemo(()=>cards.map(c=>{
     const fat = calcularFaturaCartao(c, selMonth);
@@ -2447,13 +2454,12 @@ export default function App() {
       if(!assertCardInvoicesOpenForEntries(novosLancamentos)) return;
       setTrans(p=>[...p,...novosLancamentos]);
     }
-    // Lançamento fixo/recorrente — gera N meses a partir do mês selecionado
+    // Lançamento fixo/recorrente — gera N meses a partir do mês informado pelo usuário
     else if(form.fixo){
       const dia   = parseInt(form.fixoDia);
       const meses = Math.max(2, parseInt(form.fixoMeses)||12);
       const grp   = uid();
-      // Mês de início = mês do seletor de mês (selMonth) do dashboard
-      const [startY, startM] = selMonth.split("-").map(Number);
+      const [startY, startM] = (form.fixoMesInicio||selMonth).split("-").map(Number);
       const novosLancamentos = Array.from({length:meses},(_,i)=>{
         // Garante que o dia existe no mês (ex: dia 31 em fev → último dia)
         const dt = new Date(startY, startM-1+i, dia);
@@ -2479,6 +2485,87 @@ export default function App() {
     }
     closeModal();
   };
+  // v0.3.33 — Transferência entre contas (par atômico, movimento nulo contábil).
+  const openAddTransfer=()=>{
+    const primeira = contas[0]?.id || "";
+    const segunda  = contas.find(c=>c.id!==primeira)?.id || "";
+    setForm({ transferOrigemId:primeira, transferDestinoId:segunda, valor:"", data:todayIso(), descricao:"" });
+    setModal("addTransfer");
+  };
+  const addTransfer=()=>{
+    const res = createTransfer(
+      { trans, contas },
+      { contaOrigemId:form.transferOrigemId, contaDestinoId:form.transferDestinoId, valor:moneyToNumber(form.valor), data:form.data, descricao:form.descricao },
+      { genId:(prefix)=>`${prefix}_${uid()}` }
+    );
+    if(!res.ok){
+      const msgs = {
+        contas_obrigatorias:"Selecione as contas de origem e destino.",
+        contas_iguais:"Escolha contas diferentes para origem e destino.",
+        valor_invalido:"Informe um valor maior que zero.",
+        data_obrigatoria:"Informe a data da transferência.",
+        conta_inexistente:"Conta selecionada não encontrada.",
+      };
+      pushToast({ message:msgs[res.reason]||"Não foi possível criar a transferência.", tone:"coral" });
+      return;
+    }
+    const before = { trans };
+    setTrans(res.trans);
+    pushToast({ message:"Transferência registrada.", onUndo:()=>setTrans(before.trans) });
+    closeModal();
+  };
+  // v0.3.33 — Associar dois lançamentos JÁ existentes como transferência.
+  const openLinkTransfer=(legId)=>{ setForm({ linkLegId:legId }); setModal("linkTransfer"); };
+  const confirmLinkTransfer=(candidateId)=>{
+    const a = trans.find(t=>t.id===form.linkLegId);
+    const b = trans.find(t=>t.id===candidateId);
+    if(!a||!b) return;
+    const despesaId = a.tipo==="despesa" ? a.id : b.id;
+    const receitaId = a.tipo==="receita" ? a.id : b.id;
+    const res = linkAsTransfer({ trans }, { despesaId, receitaId }, { genId:(p)=>`${p}_${uid()}` });
+    if(!res.ok){
+      const msgs = {
+        valores_diferentes:"Os dois lançamentos precisam ter o mesmo valor.",
+        mesma_conta:"Escolha lançamentos de contas diferentes.",
+        tipos_invalidos:"Selecione uma despesa e uma receita.",
+        lancamento_nao_elegivel:"Um dos lançamentos não pode virar transferência (cartão/fatura/parcela).",
+      };
+      pushToast({ message:msgs[res.reason]||"Não foi possível associar os lançamentos.", tone:"coral" });
+      return;
+    }
+    const before = { trans };
+    setTrans(res.trans);
+    pushToast({ message:"Lançamentos associados como transferência.", onUndo:()=>setTrans(before.trans) });
+    closeModal();
+  };
+  const desvincularTransfer=(transferId)=>{
+    const res = unlinkTransfer({ trans }, transferId);
+    if(!res.ok) return;
+    const before = { trans };
+    setTrans(res.trans);
+    pushToast({ message:"Transferência desvinculada; lançamentos restaurados.", onUndo:()=>setTrans(before.trans) });
+  };
+  const excluirTransferPair=(transferId)=>{
+    const res = removeTransfer({ trans }, transferId);
+    if(!res.ok) return;
+    const before = { trans };
+    setTrans(res.trans);
+    pushToast({ message:`Transferência excluída (${res.removidas} lançamentos).`, onUndo:()=>setTrans(before.trans) });
+  };
+  // v0.3.33 — confirma os vínculos de transferência detectados na importação.
+  const confirmImportTransfers=()=>{
+    const selecionados = impTransferMatches.filter(m=>impTransferSel[m.importadaId]);
+    const before = { trans };
+    let atual = trans;
+    let vinculados = 0;
+    for(const m of selecionados){
+      const res = linkAsTransfer({ trans:atual }, { despesaId:m.despesaId, receitaId:m.receitaId }, { genId:(p)=>`${p}_${uid()}` });
+      if(res.ok){ atual = res.trans; vinculados++; }
+    }
+    if(vinculados){ setTrans(atual); pushToast({ message:`${vinculados} transferência(s) vinculada(s) na importação.`, onUndo:()=>setTrans(before.trans) }); }
+    setModal(null); setImpTransferMatches([]); setImpTransferSel({});
+  };
+  const dispensarImportTransfers=()=>{ setModal(null); setImpTransferMatches([]); setImpTransferSel({}); };
   const addCard=()=>{
     if(!requireField(Boolean(form.nome?.trim()), "Nome do cartão", "cardNome")) return;
     if(!requireField(Boolean(form.contaPagamentoId), "Conta corrente para pagamento da fatura", "cardContaPagamentoId")) return;
@@ -2798,7 +2885,8 @@ export default function App() {
         setPessoas(data.pessoas);
         setDividas(data.dividas);
         setDespPess(data.despPess);
-        setCats(data.cats);
+        // v0.3.33.x — backup sem a chave "cats" (arquivo antigo/parcial) preserva as categorias atuais em vez de zerar.
+        setCats(data.cats !== undefined ? data.cats : cats);
         setParams(data.params);
         setSaldosIniciais(data.saldosIniciais);
         setFaturas(data.faturas);
@@ -3132,11 +3220,20 @@ export default function App() {
     };
     if(impMode==="bancario"||impMode==="vale"){
       const conta=contas.find(c=>c.id===impContaId);
-      setTrans(p=>[...p,...okFinal.map(r=>({
+      const novos = okFinal.map(r=>({
         id:uid(), tipo:r.tipo, origem:conta?.tipo||"corrente", cartaoId:null, contaId:impContaId,
         catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data,
         fixo:false, importado:true, importTipo:impMode, bancoImportacao:impMode==="bancario"?impBanco:null, fornecedorVale:r.fornecedorVale||null, carteiraVale:r.carteiraVale||null, hora:r.hora||null, importBatchId, status:"pago", valorPago:r.valor, competencia:mKey(r.data),
-      }))]);
+      }));
+      const updated = [...trans, ...novos];
+      setTrans(updated);
+      // Auto-detecção de transferências (importado ↔ existente em outra conta).
+      const matches = detectTransferCandidates(updated, novos.map(n=>n.id), { janelaDias: params.duplaEntradaDias });
+      if(matches.length){
+        setImpTransferMatches(matches);
+        setImpTransferSel(Object.fromEntries(matches.map(m=>[m.importadaId, true])));
+        setModal("importTransferMatches");
+      }
     } else {
       setTrans(p=>[...p,...okFinal.map(r=>({
         id:uid(), tipo:r.tipo||"despesa", origem:"cartao", cartaoId:impCId, contaId:null,
@@ -3283,6 +3380,13 @@ export default function App() {
   }, [setTrans]);
 
   const renderCategoryEditor = useCallback((t, compact = false) => {
+    if (t.natureza==="transferencia") {
+      return (
+        <span style={{ fontSize:compact?10:11, background:C.gold+"22", color:C.gold, padding:compact?"2px 5px":"2px 7px", borderRadius:20, fontWeight:600, whiteSpace:"nowrap" }}>
+          ⇄ Transferência · {t.tipo==="despesa"?"saída":"entrada"}
+        </span>
+      );
+    }
     const editing = editingCategoryId === t.id;
     return (
       <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:compact?"nowrap":"wrap" }}>
@@ -3312,7 +3416,7 @@ export default function App() {
     const map = {};
     monthTrans
       .filter(t =>
-        t.tipo === "despesa" &&
+        isDespesaContabil(t) &&
         (t.origem === "corrente" ||
          t.origem === "vale_alimentacao" ||
          t.origem === "vale_refeicao")
@@ -3343,7 +3447,7 @@ export default function App() {
 
     const meses = Math.min(4, parseInt(form.fixoMeses) || 0);
     const dia = parseInt(form.fixoDia) || 1;
-    const [startY, startM] = selMonth.split("-").map(Number);
+    const [startY, startM] = (form.fixoMesInicio||selMonth).split("-").map(Number);
 
     return Array.from({ length: meses }, (_, i) => {
       const maxDay = new Date(startY, startM + i, 0).getDate();
@@ -3355,7 +3459,7 @@ export default function App() {
         mes: `${MONTHS[dt.getMonth()]}/${dt.getFullYear()}`
       };
     });
-  }, [form.fixo, form.fixoDia, form.fixoMeses, selMonth]);
+  }, [form.fixo, form.fixoDia, form.fixoMeses, form.fixoMesInicio, selMonth]);
 
   const recorrenciasAgrupadas = useMemo(() => {
     const grupos = new Map();
@@ -3662,7 +3766,10 @@ export default function App() {
                   ? "Filtro por período ativo"
                   : `Exibindo mês selecionado: ${formatMonthBR(selMonth)}`}
               </div>
-              <button onClick={openAddTrans} style={btn(C.emerald)}>+ Novo Lançamento</button>
+              <div style={{ display:"flex", gap:9, flexWrap:"wrap" }}>
+                <button onClick={openAddTransfer} style={btn(C.gold)}>⇄ Nova Transferência</button>
+                <button onClick={openAddTrans} style={btn(C.emerald)}>+ Novo Lançamento</button>
+              </div>
             </div>
 
             <TransactionFiltersPanel
@@ -3689,6 +3796,7 @@ export default function App() {
                         {t.fixo&&<span style={{ marginLeft:5, fontSize:10, background:C.border, padding:"2px 5px", borderRadius:4, color:C.soft }}>fixo</span>}
                         {t.totalParcelas&&<span style={{ marginLeft:5, fontSize:10, background:C.gold+"22", padding:"2px 5px", borderRadius:4, color:C.gold }}>{t.parcela}/{t.totalParcelas}×</span>}
                         {t.importado&&<span style={{ marginLeft:5, fontSize:10, background:C.emerald+"22", padding:"2px 5px", borderRadius:4, color:C.emerald }}>importado</span>}
+                        {t.natureza==="transferencia"&&<span style={{ marginLeft:5, fontSize:10, background:C.gold+"22", padding:"2px 5px", borderRadius:4, color:C.gold }}>⇄ {t.tipo==="despesa"?"saída":"entrada"} · {contas.find(c=>c.id===t.transferContraContaId)?.nome||"conta"}</span>}
                       </td>
                       <td style={{ padding:"9px 13px", minWidth:210 }}>
                         {renderCategoryEditor(t)}
@@ -3702,9 +3810,19 @@ export default function App() {
                       </td>
                       <td style={{ padding:"9px 13px", fontWeight:700, color:t.tipo==="receita"?C.emerald:C.text }}>{t.tipo==="receita"?"+":"-"}{fmtBRL(valorExibicaoLancamento(t))}</td>
                       <td style={{ padding:"9px 13px", display:"flex", gap:5, alignItems:"center" }}>
-                        {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.emerald })}>Baixar</button>}
-                        {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarParcialTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Parcial</button>}
-                        <button onClick={()=>delTrans(t.id)} style={{ background:"transparent", border:"none", color:C.coral, cursor:"pointer", fontSize:16 }}>×</button>
+                        {t.natureza==="transferencia" ? (
+                          <>
+                            {t.transferOrigin==="vinculo" && <button onClick={()=>desvincularTransfer(t.transferId)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Desvincular</button>}
+                            <button onClick={()=>excluirTransferPair(t.transferId)} title="Excluir as duas pernas da transferência" style={{ background:"transparent", border:"none", color:C.coral, cursor:"pointer", fontSize:16 }}>×</button>
+                          </>
+                        ) : (
+                          <>
+                            {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.emerald })}>Baixar</button>}
+                            {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarParcialTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Parcial</button>}
+                            {isTransferEligible(t)&&<button onClick={()=>openLinkTransfer(t.id)} title="Associar a outro lançamento como transferência" style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>⇄ Associar</button>}
+                            <button onClick={()=>delTrans(t.id)} style={{ background:"transparent", border:"none", color:C.coral, cursor:"pointer", fontSize:16 }}>×</button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -3920,8 +4038,20 @@ export default function App() {
                   {/* Resumo: saldo inicial | entradas | saidas | saldo final */}
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:9, marginBottom:14 }}>
                     <div style={{ background:C.navy, borderRadius:8, padding:"10px 13px" }}>
-                      <div style={lbl}>Saldo Inicial do Mês</div>
-                      <MoneyInput style={{ ...inp, padding:"5px 8px", fontSize:12 }} value={String(saldoIni)} onChange={value=>setSaldoInicialContaMes(ct.id, selMonth, value)}/>
+                      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6 }}>
+                        <div style={lbl}>Saldo Inicial do Mês</div>
+                        {editSaldoIniId!==ct.id&&(
+                          <button onClick={()=>setEditSaldoIniId(ct.id)} title="Editar saldo inicial" style={{ background:"transparent", border:"none", color:C.soft, cursor:"pointer", fontSize:11, padding:0 }}>✎ editar</button>
+                        )}
+                      </div>
+                      {editSaldoIniId===ct.id?(
+                        <div style={{ display:"flex", gap:6, alignItems:"center", marginTop:2 }}>
+                          <MoneyInput autoFocus style={{ ...inp, padding:"5px 8px", fontSize:12 }} value={String(saldoIni)} onChange={value=>setSaldoInicialContaMes(ct.id, selMonth, value)}/>
+                          <button onClick={()=>setEditSaldoIniId(null)} title="Concluir edição" style={{ background:"transparent", border:"none", color:C.emerald, cursor:"pointer", fontSize:15, padding:"0 4px" }}>✓</button>
+                        </div>
+                      ):(
+                        <div style={{ fontSize:15, fontWeight:700, color:C.text, marginTop:2 }}>{fmtBRL(saldoIni)}</div>
+                      )}
                     </div>
                     <div style={{ background:C.navy, borderRadius:8, padding:"10px 13px" }}>
                       <div style={lbl}>↑ Entradas</div>
@@ -4578,16 +4708,22 @@ export default function App() {
                       {/* Toggle fixo/recorrente */}
                       <div style={{ background:C.navy, borderRadius:9, padding:"11px 13px" }}>
                         <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:13, cursor:"pointer", marginBottom:form.fixo?12:0 }}>
-                          <input type="checkbox" checked={!!form.fixo} onChange={e=>setForm(f=>({...f,fixo:e.target.checked,data:""}))}/>
+                          <input type="checkbox" checked={!!form.fixo} onChange={e=>setForm(f=>({...f,fixo:e.target.checked,data:"",fixoMesInicio:e.target.checked?(f.fixoMesInicio||selMonth):f.fixoMesInicio}))}/>
                           <span style={{ fontWeight:600 }}>Lançamento fixo / recorrente</span>
                         </label>
 
                         {form.fixo&&(
                           <>
                             <div style={{ fontSize:12, color:C.soft, marginBottom:10 }}>
-                              Será registrado todo mês no dia informado, a partir de <strong style={{ color:C.text }}>{MONTHS[selMon-1]}/{selYear}</strong>.
+                              Será registrado todo mês no dia informado, a partir do mês inicial escolhido abaixo.
                             </div>
-                            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
+                            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:9 }}>
+                              <div>
+                                <div style={lbl}>Mês inicial</div>
+                                <input style={inp} type="month"
+                                  value={form.fixoMesInicio||selMonth} onChange={e=>setForm(f=>({...f,fixoMesInicio:e.target.value}))}/>
+                                <div style={{ fontSize:10, color:C.soft, marginTop:3 }}>Primeiro mês da recorrência</div>
+                              </div>
                               <div>
                                 <div style={lbl}>Dia do mês</div>
                                 <input style={inputStyle("fixoDia")} type="number" min={1} max={31} placeholder="Ex: 5"
@@ -4637,6 +4773,112 @@ export default function App() {
                   <button onClick={addTransaction} style={btn(C.emerald,{ flex:1 })}>
                     {form.parcelado?`Salvar ${form.parcelas||""}× parcelas`:form.fixo?`Registrar ${form.fixoMeses||""}× meses`:"Salvar"}
                   </button>
+                </div>
+              </>
+            )}
+            {modal==="addTransfer"&&(
+              <>
+                <h3 style={{ margin:"0 0 6px", fontWeight:800 }}>⇄ Nova Transferência</h3>
+                <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>
+                  Movimento entre contas — não conta como receita nem despesa; só afeta o saldo das contas envolvidas.
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div>
+                    <div style={lbl}>Conta de origem (sai)</div>
+                    <select style={inp} value={form.transferOrigemId||""} onChange={e=>setForm(f=>({...f,transferOrigemId:e.target.value}))}>
+                      <option value="">Selecione</option>
+                      {contas.map(c=><option key={c.id} value={c.id}>{c.icon||"🏦"} {c.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={lbl}>Conta de destino (entra)</div>
+                    <select style={inp} value={form.transferDestinoId||""} onChange={e=>setForm(f=>({...f,transferDestinoId:e.target.value}))}>
+                      <option value="">Selecione</option>
+                      {contas.filter(c=>c.id!==form.transferOrigemId).map(c=><option key={c.id} value={c.id}>{c.icon||"🏦"} {c.nome}</option>)}
+                    </select>
+                  </div>
+                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></div>
+                  <div><div style={lbl}>Data</div><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
+                  <div><div style={lbl}>Descrição (opcional)</div><input style={inp} placeholder="Ex: Reserva de emergência" value={form.descricao||""} onChange={e=>setForm(f=>({...f,descricao:e.target.value}))}/></div>
+                </div>
+                <div style={{ display:"flex", gap:9, marginTop:16 }}>
+                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
+                  <button onClick={addTransfer} style={btn(C.gold,{ flex:1 })}>Transferir</button>
+                </div>
+              </>
+            )}
+            {modal==="linkTransfer"&&(()=>{
+              const leg = trans.find(t=>t.id===form.linkLegId);
+              if(!leg) return <div>Lançamento não encontrado.</div>;
+              const candidatos = findTransferCandidates(trans, form.linkLegId)
+                .slice()
+                .sort((a,b)=>Math.abs(new Date(a.data)-new Date(leg.data))-Math.abs(new Date(b.data)-new Date(leg.data)));
+              const contraLabel = leg.tipo==="despesa" ? "receita (entrada)" : "despesa (saída)";
+              return (
+                <>
+                  <h3 style={{ margin:"0 0 6px", fontWeight:800 }}>⇄ Associar como transferência</h3>
+                  <div style={{ fontSize:12, color:C.soft, marginBottom:12 }}>
+                    Associando <strong style={{ color:C.text }}>{leg.descricao||"(sem descrição)"}</strong> ({leg.tipo==="despesa"?"saída":"entrada"} de {fmtBRL(leg.valor)}, {contas.find(c=>c.id===leg.contaId)?.nome||"conta"}).
+                    Escolha a {contraLabel} correspondente — mesmo valor, conta diferente.
+                  </div>
+                  {candidatos.length===0 ? (
+                    <div style={{ background:C.navy, borderRadius:9, padding:"14px 13px", fontSize:12, color:C.soft }}>
+                      Nenhum lançamento elegível encontrado (precisa ser {contraLabel}, de outra conta, com valor exatamente igual a {fmtBRL(leg.valor)}).
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", flexDirection:"column", gap:7, maxHeight:"60vh", overflowY:"auto" }}>
+                      {candidatos.map(c=>(
+                        <button key={c.id} onClick={()=>confirmLinkTransfer(c.id)}
+                          style={{ textAlign:"left", background:C.navy, border:`1px solid ${C.border}`, borderRadius:9, padding:"10px 12px", cursor:"pointer", color:C.text }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", gap:10 }}>
+                            <span style={{ fontWeight:700 }}>{c.descricao||"(sem descrição)"}</span>
+                            <span style={{ fontWeight:800, color:c.tipo==="receita"?C.emerald:C.coral, whiteSpace:"nowrap" }}>{c.tipo==="receita"?"+":"-"}{fmtBRL(c.valor)}</span>
+                          </div>
+                          <div style={{ fontSize:11, color:C.soft, marginTop:3 }}>{fmtDate(c.data)} · {contas.find(x=>x.id===c.contaId)?.nome||"conta"}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display:"flex", gap:9, marginTop:16 }}>
+                    <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
+                  </div>
+                </>
+              );
+            })()}
+            {modal==="importTransferMatches"&&(
+              <>
+                <h3 style={{ margin:"0 0 6px", fontWeight:800 }}>⇄ Transferências detectadas</h3>
+                <div style={{ fontSize:12, color:C.soft, marginBottom:12 }}>
+                  Encontramos lançamentos importados que casam com lançamentos existentes em outra conta (mesmo valor, até {params.duplaEntradaDias} dia(s) de diferença). Marque os que são transferência — as pernas deixam de contar como receita/despesa.
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8, maxHeight:"60vh", overflowY:"auto" }}>
+                  {impTransferMatches.map(m=>{
+                    const imp=trans.find(t=>t.id===m.importadaId);
+                    const ex=trans.find(t=>t.id===m.existenteId);
+                    if(!imp||!ex) return null;
+                    const sel=!!impTransferSel[m.importadaId];
+                    return (
+                      <label key={m.importadaId} style={{ display:"flex", gap:10, alignItems:"flex-start", background:C.navy, border:`1px solid ${sel?C.gold:C.border}`, borderRadius:9, padding:"10px 12px", cursor:"pointer" }}>
+                        <input type="checkbox" checked={sel} onChange={e=>setImpTransferSel(s=>({...s,[m.importadaId]:e.target.checked}))} style={{ marginTop:2 }}/>
+                        <div style={{ flex:1 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", gap:10 }}>
+                            <span style={{ fontWeight:700 }}>{fmtBRL(m.valor)}</span>
+                            <span style={{ fontSize:11, color:C.soft }}>{m.dias===0?"mesmo dia":`${Math.round(m.dias)} dia(s)`}</span>
+                          </div>
+                          <div style={{ fontSize:11, color:C.soft, marginTop:4 }}>
+                            <span style={{ color:C.coral }}>↓ {imp.descricao||"(sem descrição)"}</span> · {contas.find(c=>c.id===imp.contaId)?.nome||"conta"} · {fmtDate(imp.data)}
+                          </div>
+                          <div style={{ fontSize:11, color:C.soft, marginTop:2 }}>
+                            <span style={{ color:C.emerald }}>↑ {ex.descricao||"(sem descrição)"}</span> · {contas.find(c=>c.id===ex.contaId)?.nome||"conta"} · {fmtDate(ex.data)}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display:"flex", gap:9, marginTop:16 }}>
+                  <button onClick={dispensarImportTransfers} style={btn(C.border,{ flex:1 })}>Agora não</button>
+                  <button onClick={confirmImportTransfers} style={btn(C.gold,{ flex:1 })}>Vincular selecionadas</button>
                 </div>
               </>
             )}
