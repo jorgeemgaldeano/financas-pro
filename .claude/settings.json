@@ -8,7 +8,19 @@
       "Bash(npx playwright test:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(git fetch:*)",
+      "Bash(git branch:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git for-each-ref:*)",
+      "Bash(git tag:*)",
+      "Bash(npx vitest run:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)"
     ],
     "deny": [
       "Bash(rm -rf:*)",

@@ -140,3 +140,20 @@ Delegar proativamente conforme a tarefa:
 | `especialista-financas` | Validar regras RN### (fatura, parcelas, saldos, projeções, despesas compartilhadas). |
 | `revisor-ux` | Consistência visual, cliques, responsividade, componentes reutilizáveis. |
 | `escriba-documentacao` | Changelog, registro de decisões, docs numeradas, guia de atualização, roteiro Git. |
+
+---
+
+## Desenvolvimento econômico (contexto/tokens)
+
+- **`App.jsx` tem ~4.700 linhas.** Nunca lê-lo inteiro: fazer `Grep` para a
+  função/JSX alvo e ler só a faixa (`offset`/`limit`). Preferir extrair
+  para serviço/componente a crescer o arquivo (a modularização também barateia
+  edições futuras).
+- **Docs append-only** (`08-REGISTRO-DE-DECISOES`, `09-CHANGELOG`,
+  `07-ROADMAP-E-BACKLOG` — todos 1.000+ linhas): ler só o **fim** (últimas
+  entradas) ou `Grep` pela versão/DEC específica; não ler o arquivo todo.
+- **Verificação no preview:** o React re-renderiza de forma assíncrona — evitar
+  dezenas de `preview_eval` de um clique por vez. Preferir testes unitários
+  (baratos) + **um** `preview_snapshot`/`screenshot` como prova.
+- **Branches:** manter só `main` e `develop`; criar `feature/*` a partir de
+  `develop` só quando necessário e apagar após o merge.
