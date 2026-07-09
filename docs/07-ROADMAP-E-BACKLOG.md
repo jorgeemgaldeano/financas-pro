@@ -963,6 +963,23 @@ afeta o saldo das contas envolvidas.
 consultar `especialista-financas` (RN de saldo/previsto-realizado) e
 `arquiteto-operacoes-atomicas` (par atômico). Não bumpar `LS_VERSION`.
 
+**Modularização do `App.jsx` (adiantada para esta versão — decisão do usuário
+2026-07-08):** a extração casa com a feature, porque centralizar a agregação já
+é pré-requisito do ponto transversal acima. Fazer de forma incremental e
+testada (caracterização antes de cada extração), sem misturar refatoração e
+mudança de regra no mesmo passo:
+
+- [ ] Extrair a agregação contábil para `src/services/accountingService.js`
+  (ex.: `isMovimentoContabil`, `somaReceitas`, `somaDespesas`) — vira o **ponto
+  único** onde a exclusão de `natureza:"transferencia"` é aplicada, tanto no
+  `App.jsx` quanto no `projectionService`. Testes de caracterização primeiro.
+- [ ] Aproveitar para extrair 1–2 blocos inline grandes que a feature
+  encostar (candidatos: `ParamsTab`, aba de importação, Dashboard) para
+  arquivos próprios em `src/components/`, sem alterar comportamento.
+- [ ] Meta desta versão: reduzir `App.jsx` (~4.700 linhas) e baratear
+  leitura/edição futura. O restante da modularização estrutural segue na
+  v0.3.37.
+
 ### v0.3.34 — Cofrinhos (objetivos de poupança)
 
 Planejado em 2026-07-08. Nome **"Cofrinhos"** (decisão do usuário) para não
@@ -1026,6 +1043,10 @@ existente; adiciona entidade nova.
   (hoje só scaffold, ver `DEC-0031`). Não iniciar sem essa decisão.
 
 ### v0.3.37 — Modularização estrutural
+
+> Nota (2026-07-08): a modularização foi **iniciada na v0.3.33** (extração da
+> agregação contábil + 1–2 blocos inline grandes). Esta seção cobre o que
+> restar depois disso.
 
 - [ ] Extrair `simulationService.js` (cálculo de simulações hoje dentro
   de `App.jsx`).
