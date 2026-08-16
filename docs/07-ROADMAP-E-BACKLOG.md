@@ -1091,32 +1091,38 @@ raciocínio do sequenciamento por fase.
 **Atomic Design do front-end (escopo novo, `DEC-0038`) — 5 fases, cada
 uma testável/validável isoladamente antes de seguir para a próxima:**
 
-- [ ] **Fase 1 — Tokens.** Criar `src/theme/tokens.js` com a paleta `C`
+- [x] **Fase 1 — Tokens.** Criar `src/theme/tokens.js` com a paleta `C`
   hoje presa dentro de `App.jsx`. Componentes já extraídos
   (`ConfirmDialog`, `RequiredFieldModal`, `Toast`, `CashFlowChart`) trocam
   seu `DEFAULT_COLORS`/`colors` próprio por import de `tokens.js` — fecha
   o risco de drift de cor entre telas. Risco: quase zero (sem mudança
   visual).
-- [ ] **Fase 2 — Atoms.** `Button`, `Card`, `Label`, `StatValue`,
+- [x] **Fase 2 — Atoms.** `Button`, `Card`, `Label`, `StatValue`,
   `ProgressBar`, `Badge`, `IconButton` (o padrão "×" de excluir, hoje
   repetido 15×), `MoneyInput` (hoje função local em `App.jsx:419`, nunca
   extraída). Wrappers finos em cima do estilo já existente, sem mudar
   visual — validar por preview antes/depois. Risco: baixo.
-- [ ] **Fase 3 — Molecules.** `FormField` (Label+Input, hoje pareados à
+- [x] **Fase 3 — Molecules.** `FormField` (Label+Input, hoje pareados à
   mão em 46+ lugares), `StatTile` (Label+StatValue+legenda),
   `ProgressCard` (unifica o padrão de barra+badge+status hoje duplicado
   quase igual entre Metas e Cofrinhos), `ModalShell` (título+corpo+rodapé
   Cancelar/Confirmar, reaproveitado pelos 6 modais). Risco: médio (mais
-  callsites tocados, mas ainda presentational).
-- [ ] **Fase 4 — Organisms.** Uma aba = um componente, mesmo padrão já
-  provado em `PessoasTab`/`ParamsTab`. Ordem das menores pras maiores:
-  Simulações (~33 linhas) → Cofrinhos (~82) → Lançamentos (~64) → Cartões
-  (~60) → Recorrências (~78) → Contas (~119) → Metas (~98) → Importação
-  (~153) → Dashboard (~167) → Projeções (~199, maior e mais dependente de
-  filtros — deixar por último). Modais: os 5 pequenos
-  (`addTransfer`/`addCofrinho`/`movimentoCofrinho`/`editRecorrencia`/
-  `addCard`) antes do `addTrans` (~189 linhas, formulário mais usado do
-  app — maior risco).
+  callsites tocados, mas ainda presentational). Entregue como
+  `FormField`/`StatTile`/`ProgressStat`/`ModalFooter`/`MetaInput`/
+  `MonthShortInput`/`CategorySelect`.
+- [x] **Fase 4 — Organisms (abas).** Uma aba = um componente, em arquivo
+  próprio (não mais função dentro de `App.jsx`, ao contrário do padrão
+  antigo de `PessoasTab`/`ParamsTab`). As 10 abas restantes viraram
+  organisms: Simulações, Cofrinhos, Lançamentos, Cartões, Recorrências,
+  Contas, Metas, Importação, Dashboard, Projeções. Infraestrutura
+  compartilhada extraída no caminho: `categoryTreeUtils.js`,
+  `simulationService.js` (item 1 do backlog original, com 11 testes
+  novos), `BarChart`/`DonutChart`. `App.jsx`: 5.048 → 3.727 linhas (-26%).
+- [ ] **Fase 4 — Organisms (modais).** Os 6 modais do switch em
+  `App.jsx` (`addTrans`, `addTransfer`, `addCofrinho`,
+  `movimentoCofrinho`, `editRecorrencia`, `addCard`) ainda estão inline —
+  extrair os 5 pequenos antes do `addTrans` (~189 linhas, formulário mais
+  usado do app — maior risco).
 - [ ] **Fase 5 — Template/Page.** Só depois que os organisms já saíram:
   extrair `AppShell` (sidebar+topbar+slot de conteúdo, hoje misturado no
   `return` de `App()`). `App.jsx` fica reduzido a orquestração de
