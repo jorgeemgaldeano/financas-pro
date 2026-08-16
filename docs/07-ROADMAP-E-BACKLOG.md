@@ -1125,11 +1125,49 @@ uma testável/validável isoladamente antes de seguir para a próxima:**
   mais usado do app) deixado por último, validado no preview (modo
   cartão, parcelamento com preview de cálculo). `App.jsx`: 5.048 → 3.457
   linhas (-32%).
-- [ ] **Fase 5 — Template/Page.** Só depois que os organisms já saíram:
-  extrair `AppShell` (sidebar+topbar+slot de conteúdo, hoje misturado no
-  `return` de `App()`). `App.jsx` fica reduzido a orquestração de
-  estado/hooks + composição — alvo realista: sair de ~5.000 linhas para a
-  faixa de 600-800.
+- [x] **Fase 5 — Template/Page.** Executada em escopo completo (decisão do
+  usuário registrada no adendo de `DEC-0038`), porque extrair só o
+  `AppShell` teria reduzido o arquivo em ~130 linhas e deixado 1.278
+  linhas de organism ainda dentro dele. Entregue:
+  `components/templates/AppShell.jsx` (sidebar+topbar+slot, mais
+  `TABS`/`TAB_ICONS`/`NAV_LABELS`), `components/organisms/ModalHost.jsx`
+  (moldura e switch dos 6 modais), `components/organisms/PessoasTab.jsx` e
+  `components/organisms/ParamsTab.jsx` (as duas últimas abas no padrão
+  antigo), `constants/seedData.js` (9 constantes `INIT_*`) e
+  `services/importDuplicateService.js` (chaves de deduplicação, com 33
+  testes de caracterização novos). `App.jsx`: 3.457 → **1.823 linhas**
+  (5.048 → 1.823 no total da v0.3.37, -64%).
+- [ ] **Fase 6 (candidata, NÃO aprovada) — decompor o corpo de `App()`
+  em hooks customizados.** Sobraram 1.590 linhas em `App()`: estado,
+  hooks, handlers e composição. Quebrá-las em hooks por domínio
+  (`useImportFlow`, `useFaturas`, `useCofrinhos`, `useRecorrencias`...)
+  é o único caminho que chega à faixa de 600-800 originalmente imaginada
+  na `DEC-0038`. **Não faz parte da v0.3.37 e não deve ser puxada sem
+  decisão explícita:** diferente das fases 1-5, mexe em wiring de estado
+  com `useLocalStorage`/persistência no meio, então deixa de ser mudança
+  "puramente estrutural/apresentacional" e exige análise de risco de
+  persistência própria. Só faz sentido avaliar depois da v0.3.38
+  (sincronização multi-dispositivo), que vai mexer nessa mesma camada.
+
+**Dívida técnica aberta pela Fase 5:**
+
+- [ ] **Adotar ESLint no projeto.** Durante a Fase 5, a extração de
+  `ParamsTab` quebrou em runtime com `catColor is not defined` e nem
+  `npm test` nem `npm run build` acusaram — não há linter, e o Vitest não
+  cobre telas. Um `no-undef` teria pego na hora. Enquanto não houver,
+  toda extração de componente precisa de verificação manual de
+  identificadores livres mais preview obrigatório.
+- [ ] **Alinhar o contrato de props de `PessoasTab`.** Ela recebe `C`,
+  `uid`, `fmtBRL` e `fmtDate` por parâmetro, enquanto todos os outros
+  organisms importam esses mesmos valores direto de
+  `theme/tokens.js`/`utils/`. Foi preservado assim de propósito na Fase 5
+  (movimentação pura, para não misturar mudança de assinatura com
+  mudança de arquivo). `C`/`fmtBRL`/`fmtDate` são troca trivial; `uid`
+  exige extrair a função do `App.jsx` para `utils/` antes.
+- [ ] **`APP_VERSION` está em `0.3.35.0` com a v0.3.37 em curso**
+  (`App.jsx`). Divergência pré-existente, não introduzida pela Fase 5 —
+  o badge da sidebar mostra a versão errada. Decidir se o bump acontece
+  no fechamento da v0.3.37.
 
 ### v0.3.38 — Sincronização multi-dispositivo (casal em notebooks separados)
 

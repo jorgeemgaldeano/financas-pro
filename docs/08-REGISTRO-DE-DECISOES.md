@@ -1966,3 +1966,45 @@ formato de dados, chave, prefixo ou schema.
 ### Impacto em regra de negócio
 
 Nenhum. Mudança puramente estrutural/visual — nenhuma RN é alterada.
+
+### Adendo (2026-08-16) — a meta de "600-800 linhas" estava errada
+
+Ao iniciar a Fase 5, a medição do `App.jsx` (então com 3.457 linhas)
+mostrou que a meta declarada acima nas "Consequências positivas" era
+inalcançável pelo escopo que a própria fase definia. Composição real
+naquele momento:
+
+| Bloco | Linhas |
+|---|---|
+| Imports | 51 |
+| Helpers de módulo (backup, seed, `uid`, chaves de duplicata) | 423 |
+| `PessoasTab` (função dentro do `App.jsx`) | 849 |
+| `ParamsTab` (idem) | 429 |
+| Corpo de `App()` — estado, hooks, handlers | 1.469 |
+| Árvore de render | 229 |
+
+O `AppShell` vive dentro das 229 linhas de render e vale ~130 delas.
+Extrair só ele levaria o arquivo a ~3.330 linhas.
+
+Pior, a frase original se contradizia: dizia que o `App.jsx` ficaria com
+"orquestração de estado/hooks + composição", mas essa orquestração
+sozinha já eram 1.469 linhas. O número 600-800 foi otimismo na hora de
+escrever o plano, não uma estimativa medida.
+
+**Decisão do usuário, consultado com as três opções na mesa:** executar a
+Fase 5 em escopo completo — `AppShell` + `ModalHost` + `PessoasTab` e
+`ParamsTab` como organisms + seed data em `constants/` + chaves de
+duplicata em `services/` —, sem tocar no corpo de `App()`. Resultado
+medido: **3.457 → 1.823 linhas**.
+
+A opção que de fato chegaria a 600-800 (quebrar o corpo de `App()` em
+hooks customizados) foi **deliberadamente deixada de fora**: ela mexe em
+wiring de estado com `useLocalStorage`/persistência no meio, o que
+romperia a garantia desta mesma decisão de que a v0.3.37 é mudança
+"puramente estrutural/apresentacional". Se for perseguida, deve ser uma
+fase própria, com decisão própria e análise de risco de persistência —
+registrada como `Fase 6 (candidata)` no roadmap, não aprovada.
+
+**Reversibilidade:** alta. Nenhuma extração da Fase 5 alterou
+comportamento, dado ou regra; cada uma foi um commit isolado, revertível
+sem efeito sobre as demais.

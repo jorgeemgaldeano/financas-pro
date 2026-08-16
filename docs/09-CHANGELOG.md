@@ -1245,6 +1245,95 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.37.0] - 2026-08-16
+
+Bloco "v0.3.37 — Modularização estrutural (Atomic Design do front-end)" de
+`docs/07-ROADMAP-E-BACKLOG.md`. Escopo formalizado em `DEC-0038`: 5 fases
+(tokens → atoms → molecules → organisms → template/page). Esta entrada
+cobre a **Fase 5**, que fecha o plano; as fases 1-4 foram entregues em
+sessões anteriores da mesma versão.
+
+Mudança puramente estrutural: nenhuma regra de negócio, nenhum campo
+persistido, nenhuma chave de LocalStorage e nenhum comportamento de tela
+foi alterado.
+
+### Adicionado
+
+- **`src/components/templates/AppShell.jsx`** (novo): template da
+  aplicação — aviso de falha de persistência, sidebar (logo, navegação,
+  atalho "+ Lançamento"), topbar (título da aba e navegação de mês) e slot
+  de conteúdo. `TABS`/`TAB_ICONS`/`NAV_LABELS` passam a morar aqui, por
+  serem configuração puramente apresentacional; o `App.jsx` continua dono
+  do estado `tab` e de qual organism renderizar por id.
+- **`src/components/organisms/PessoasTab.jsx`** e
+  **`src/components/organisms/ParamsTab.jsx`** (novos): as duas últimas
+  abas que ainda viviam como função de módulo dentro do `App.jsx`, no
+  padrão antigo anterior à Fase 4. Contrato de props preservado.
+- **`src/components/organisms/ModalHost.jsx`** (novo): overlay, caixa e
+  switch dos 6 modais. Os modais em si já eram componentes próprios desde
+  a Fase 4 — o que saiu do `App.jsx` foi a moldura e o roteamento.
+- **`src/constants/seedData.js`** (novo): `INIT_CATS`, `INIT_PARAMS`,
+  `INIT_CARDS`, `INIT_CONTAS`, `INIT_METAS`, `INIT_PESSOAS`,
+  `INIT_DIVIDAS`, `INIT_DESPESAS_PESSOAS` e `INIT_TRANS`. Dado puro.
+- **`src/services/importDuplicateService.js`** (novo, puro): chaves de
+  deduplicação da importação (normalização de descrição/valor/tipo,
+  leitura de parcela a partir da descrição e montagem das chaves
+  candidatas). O `App.jsx` consome só `buildImportDuplicateKeyCandidates`
+  e `buildExistingImportDuplicateKeys`.
+- **`tests/importDuplicateService.test.js`** (novo): 33 testes de
+  caracterização travando o formato das chaves que o código já produzia.
+  Essa lógica decide o que é ou não duplicata numa importação e não tinha
+  nenhuma cobertura antes.
+
+### Alterado
+
+- **`src/App.jsx`: 3.457 → 1.823 linhas (-47% nesta fase; -64% no total
+  da v0.3.37, partindo das 5.048 originais).** O que restou são 233 linhas
+  de imports/helpers de módulo e 1.590 linhas de `App()` — estado, hooks,
+  handlers e composição.
+- `NAV_LABELS` deixou de ser redeclarado dentro do callback do `map` da
+  navegação (era uma alocação por item, doze por render; agora é uma
+  constante de módulo). Mesmo resultado renderizado.
+
+### Corrigido
+
+- Não aplicável. Nenhuma correção funcional nesta fase.
+
+### Removido
+
+- Não aplicável. Nenhuma funcionalidade removida.
+
+### Migração
+
+- Nenhuma. Nenhuma chave, prefixo, schema ou campo persistido foi
+  alterado.
+
+### Testes
+
+- `npm test` (Vitest): **193/193 passando** (antes: 160/160; +33 do
+  service novo). `npm run build` aprovado em cada etapa, mantendo o alerta
+  conhecido e não bloqueante de chunk > 500 kB.
+- Validação em preview a cada etapa, sempre em **aba recém-aberta** (o
+  HMR do Vite reporta `ReferenceError` falso-positivo em aba antiga
+  quando declarações de módulo são removidas — padrão já conhecido do
+  projeto, reconfirmado nesta sessão). Cobertos: as 12 abas renderizando
+  conteúdo sem erro de console; as 6 seções de Parâmetros; a visão de
+  lista e de detalhe de Pessoas; roteamento de modais pelo `ModalHost`
+  com fechamento por backdrop preservado; navegação de mês e supressão
+  da navegação de mês em Parâmetros.
+
+### Achado durante a fase
+
+- A extração inicial de `ParamsTab` quebrou em runtime com
+  `catColor is not defined`: três identificadores livres
+  (`catColor`, `catIcon`, `getCardPaymentAccountId`) não entraram no
+  primeiro levantamento de dependências. **Nem `npm test` nem
+  `npm run build` pegaram** — o projeto não tem ESLint e o Vitest não
+  cobre essas telas; só o preview pegou. A varredura foi então refeita de
+  forma exaustiva contra os 168 identificadores importados/declarados no
+  `App.jsx` e reaplicada a `PessoasTab` (que estava correta). Ver o item
+  de backlog sobre adotar ESLint, aberto por causa disso.
+
 ## [0.3.35.0] - 2026-08-16
 
 Bloco "v0.3.35 — Performance e cálculo" de `docs/07-ROADMAP-E-BACKLOG.md`,
