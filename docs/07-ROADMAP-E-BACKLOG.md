@@ -1164,10 +1164,18 @@ uma testável/validável isoladamente antes de seguir para a próxima:**
   (movimentação pura, para não misturar mudança de assinatura com
   mudança de arquivo). `C`/`fmtBRL`/`fmtDate` são troca trivial; `uid`
   exige extrair a função do `App.jsx` para `utils/` antes.
-- [ ] **`APP_VERSION` está em `0.3.35.0` com a v0.3.37 em curso**
-  (`App.jsx`). Divergência pré-existente, não introduzida pela Fase 5 —
-  o badge da sidebar mostra a versão errada. Decidir se o bump acontece
-  no fechamento da v0.3.37.
+- [x] **`APP_VERSION` bumpado de `0.3.35.0` para `0.3.37.0`**
+  (`App.jsx:69`) em 2026-08-16, por decisão do usuário no fechamento da
+  v0.3.37. O badge da sidebar voltou a bater com o topo do
+  `09-CHANGELOG.md`. **Observação:** a v0.3.36 (Importação avançada)
+  continua inteiramente pendente e foi pulada na numeração do app —
+  `APP_VERSION` marca a última versão *entregue*, não a última planejada.
+  Se a v0.3.36 for retomada depois, ela entra como bloco de escopo, não
+  como retrocesso de versão.
+- [ ] **`package.json` está em `"version": "0.1.0"`** e nunca foi mantido
+  em sincronia com o `APP_VERSION`. Deixado como está no fechamento da
+  v0.3.37 (mexer nele sem necessidade só cria ruído em build/lockfile).
+  Decidir se vira fonte única de versão ou se é oficialmente ignorado.
 
 ### v0.3.38 — Sincronização multi-dispositivo (casal em notebooks separados)
 

@@ -66,7 +66,7 @@ function loadPdfjs() {
   return pdfjsLibPromise;
 }
 
-const APP_VERSION = "0.3.35.0";
+const APP_VERSION = "0.3.37.0";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
