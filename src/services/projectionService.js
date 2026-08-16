@@ -258,14 +258,19 @@ function buildMonthProjection({
   ];
 
   const receitasItens = monthTransactions
-    .filter(transaction => transaction?.tipo === "receita" && transaction?.origem !== "cartao")
+    .filter(transaction =>
+      transaction?.tipo === "receita" &&
+      transaction?.origem !== "cartao" &&
+      transaction?.natureza !== "transferencia" // RN031: transferência não é receita/despesa
+    )
     .filter(transaction => applyDetailFilters(transactionDetail(transaction, "receitas"), "receitas", filters));
 
   const despesasItens = monthTransactions
     .filter(transaction =>
       transaction?.tipo === "despesa" &&
       transaction?.origem !== "cartao" &&
-      transaction?.natureza !== "fatura_cartao"
+      transaction?.natureza !== "fatura_cartao" &&
+      transaction?.natureza !== "transferencia" // RN031: transferência não é receita/despesa
     )
     .filter(transaction => applyDetailFilters(transactionDetail(transaction, "despesas"), "despesas", filters));
 

@@ -1504,3 +1504,372 @@ existentes em registros existentes, pela fronteira normal de persistência.
 Respeita RN012 (isolamento de fatura) no recálculo de competência e no
 bloqueio de fatura fechada. Não altera o comportamento de nenhuma RN
 existente — adiciona um caminho novo (mover) onde antes só havia bloqueio.
+
+## DEC-0034 — Modelo de dados de transferência entre contas (v0.3.33)
+
+Data: 2026-08-16
+
+### Contexto
+
+O roadmap (`docs/07-ROADMAP-E-BACKLOG.md`, planejado em 2026-07-08) definiu
+o escopo funcional da v0.3.33 (transferência manual + auto-detecção na
+importação) mas deixou o modelo de dados como proposta a confirmar antes de
+codificar. Análise de impacto feita nesta sessão (2026-08-16) levantou o
+código real antes de travar a decisão, e corrigiu duas premissas do
+roadmap:
+
+1. O roadmap estimava "~57 pontos de filtro `tipo==='receita'/'despesa'`"
+   como superfície de risco. Levantamento real no `App.jsx` encontrou 27
+   ocorrências, das quais só **6 são agregações que precisam excluir a
+   transferência** (`receitaCorr`/`despCorr` e gráfico de categorias no
+   Dashboard, `receitasItens`/`despesasItens` em `projectionService.js`); o
+   resto são pontos cosméticos de UI (cor, ícone, sinal) que não quebram se
+   não forem tocados imediatamente.
+2. O roadmap propunha "reusar `params.duplaEntradaDias`" para a
+   auto-detecção na importação. Esse parâmetro existe **só como campo de
+   configuração** (`App.jsx:188` default, `App.jsx:1954` label) — nenhum
+   código o consome. Não há motor de detecção de duplicidade para reusar; a
+   Fase 2 (auto-detecção) exige escrever esse matcher do zero.
+
+### Decisão
+
+1. **Modelo de dados:** cada perna da transferência mantém `tipo:"despesa"`
+   (origem) / `tipo:"receita"` (destino) — é o `tipo` que decide o sinal em
+   `movimentoContaMes` (`App.jsx:2201-2208`), e ele **não muda**. O campo
+   novo `natureza:"transferencia"` (mesmo padrão já usado para
+   `natureza:"fatura_cartao"` em `cardInvoiceOperations.js`) é só o
+   marcador de exclusão dos 6 pontos de agregação de receita/despesa
+   listados acima. As duas pernas são ligadas por `transferId` comum.
+   Formalizado em `RN031`.
+2. **Sequenciamento em duas fases, não uma entrega única:**
+   - **Fase 1 (v0.3.33):** transferência manual — CRUD do par atômico via
+     `transferService.js` novo (padrão `cardInvoiceOperations.js`/
+     `reassignmentService.js`, snapshot completo), testes de caracterização
+     dos 6 pontos de agregação **antes** de alterá-los, e ajuste dos 6
+     pontos para excluir `natureza:"transferencia"`.
+   - **Fase 2 (v0.3.33.1 ou posterior):** auto-detecção na importação
+     (matcher débito/crédito por valor + janela de dias, reusando o *nome*
+     do parâmetro `params.duplaEntradaDias` mas implementando a lógica do
+     zero), com vínculo sempre sujeito a confirmação do usuário na prévia
+     — nunca automático.
+3. **Sem alteração de `LS_VERSION`/schema.** Transferência usa a mesma
+   chave `trans` já existente; `natureza` e `transferId` são campos novos
+   e opcionais em registros existentes, cobertos pelo `migrationPipeline.js`
+   com default seguro (RN002) para dados antigos sem esses campos.
+
+### Alternativas avaliadas
+
+- **Entregar manual + auto-detecção juntas numa única v0.3.33** (escopo
+  original do roadmap). Descartada nesta decisão: a Fase 2 tem uma
+  superfície de risco maior do que o roadmap assumia (motor novo, não
+  reaproveitamento), e misturar as duas aumenta o raio de teste antes de a
+  Fase 1 (isolada, mais simples de caracterizar) estar validada em uso
+  real. Decisão do usuário (2026-08-16): sequenciar em fases.
+- **`tipo` novo (`"transferencia"`) em vez de reusar `receita`/`despesa`
+  por perna.** Descartada: quebraria `movimentoContaMes`, que decide o
+  sinal do saldo por conta unicamente por `tipo==="receita"`, e exigiria
+  tocar esse cálculo central (risco maior, sem ganho — `natureza` já
+  resolve a exclusão sem mexer no saldo).
+- **Um único registro com dois `contaId` (origem/destino) em vez de duas
+  transações ligadas por `transferId`.** Descartada nesta decisão (opção
+  levantada e recusada pelo usuário, 2026-08-16): quebraria o padrão atual
+  de que toda entrada em `trans` pertence a uma conta só, exigindo tratar
+  transferência como tipo de registro à parte em todos os pontos que hoje
+  iteram `trans` (backup, filtros, `reassignmentService`, etc.) — reforma
+  estrutural desproporcional ao ganho.
+
+### Consequências positivas
+
+- Reaproveita o padrão de "serviço puro atômico + `natureza` como marcador
+  de exclusão" já validado em `cardInvoiceOperations.js` e
+  `reassignmentService.js` — sem conceito novo no código.
+- Superfície de mudança da Fase 1 é pequena e bem delimitada (6 pontos de
+  agregação, testados por caracterização antes de tocar).
+- Fase 2 isolada permite validar a Fase 1 com dados reais do usuário antes
+  de investir na complexidade do matcher de auto-detecção.
+
+### Consequências negativas ou riscos
+
+- Enquanto a Fase 2 não é feita, transferências identificadas em extratos
+  importados continuam virando receita/despesa comuns (comportamento atual,
+  sem regressão — só não há ainda o atalho de vinculá-las).
+- Os pontos cosméticos de UI (ícone/cor "↑ Receita"/"↓ Despesa" nas pernas
+  de transferência) não são corrigidos na Fase 1; ficam mostrando como
+  receita/despesa comuns até um ajuste visual posterior — não afeta cálculo,
+  só a leitura da lista de lançamentos.
+
+### Impacto em LocalStorage
+
+Nenhuma chave nova. `natureza` (já existente, usado por `fatura_cartao`) e
+`transferId` (novo) são campos adicionais opcionais em registros de `trans`
+existente. Sem bump de `LS_VERSION`. Default seguro via
+`migrationPipeline.js` para dados antigos sem esses campos (RN002).
+
+### Impacto em regra de negócio
+
+Formaliza `RN031` (nova), cumprindo o que `RN004` já prometia e nunca
+implementou. Não altera nenhuma RN existente.
+
+### Adendo — 2026-08-16, mesma sessão: Fase 2 entregue sem esperar validação isolada
+
+O sequenciamento original (item 2 da decisão) previa Fase 2 só depois da
+Fase 1 validada em uso real, em versão separada (v0.3.33.1+). O usuário
+optou por acelerar e pediu a Fase 2 na mesma sessão, ainda sob a mesma tag
+`v0.3.33.0` — a Fase 1 tinha sido validada em preview real (não em uso
+real de produção) antes da Fase 2 começar, o que mitiga parcialmente o
+risco original de "investir no matcher antes de validar o modelo". A forma
+aprovada aqui (item 1) não mudou: `linkImportedRowAsTransfer` converte a
+transação de crédito existente em vez de duplicá-la, exatamente como
+desenhado. Ver entrada `[0.3.33.0]` completa em `docs/09-CHANGELOG.md`.
+
+## DEC-0035 — Modelo de dados e fórmula de simulação de Cofrinhos (v0.3.34)
+
+Data: 2026-08-16
+
+### Contexto
+
+Análise de impacto desta sessão confirmou que "Cofrinhos" não colide
+estruturalmente com "Metas" (`metas[catId]`, orçamento por categoria — nada
+em comum). Registrar uma chave nova de LocalStorage segue um checklist já
+percorrido em `RN029` (quando `simulacoes` foi adicionada): `useLS`,
+`BACKUP_STORAGE_KEYS`, `normalizeBackupPayload()` em `App.jsx`, e uma aba
+nova em `TABS`. Risco técnico baixo — entidade isolada, sem tocar `trans`
+nem nenhuma RN existente.
+
+O ponto que precisava de decisão real: a fórmula de simulação do roadmap
+(`(valorAlvo − saldoAtual) / meses até a dataAlvo`) divide por zero quando a
+dataAlvo já é o mês atual ou já passou sem a meta atingida — cenário comum
+(usuário atrasado), não extremo.
+
+### Decisão
+
+1. **Ledger isolado, sem tocar `trans`.** Aportes/retiradas do cofrinho são
+   só um array dentro do próprio registro (`cofrinhos[i].aportes`) — não
+   geram transação, não afetam saldo de conta, não são transferência
+   (RN031). Escolha do usuário (2026-08-16): manter Cofrinhos
+   estruturalmente desacoplado de `trans` nesta versão, mesmo sendo
+   contabilmente menos "correto" (o dinheiro aportado não sai de fato da
+   conta corrente no modelo).
+2. **Fórmula de simulação com 3 estados** (formalizado em `RN032`):
+   "Em dia" (cálculo normal), "Concluído" (`saldoAtual >= valorAlvo`, sem
+   sugestão de aporte) e "Atrasado" (dataAlvo <= mês atual e meta não
+   atingida — recalcula o aporte sugerido como se a meta fosse o mês
+   seguinte, nunca divide por zero nem mostra valor negativo).
+3. **`cofrinhoService.js` novo** (funções puras): cálculo de saldo do
+   ledger, status do cofrinho e simulação de aporte mensal — mesmo padrão
+   de `reassignmentService.js`/`transferService.js`. Requer um helper novo
+   de "meses entre duas competências" (não existe em `dateUtils.js` hoje).
+4. **Retirada não pode deixar o saldo negativo** — bloqueio na UI, mesmo
+   sem persistência transacional (o ledger é livre, mas a UI garante
+   consistência antes de gravar).
+
+### Alternativas avaliadas
+
+- **Aporte gerar transferência real da conta corrente para o cofrinho**
+  (acoplando ao `transferService`/RN031). Descartada nesta decisão: mais
+  correta contabilmente, mas expande o escopo da v0.3.34 para depender da
+  Fase 1 da v0.3.33 e do modelo de transferência; o usuário optou por manter
+  Cofrinhos simples e desacoplado nesta versão. Fica registrado como
+  evolução possível de versão futura, não como pendência aberta desta.
+- **"Atrasado" sem sugestão de aporte** (só mostrar quanto falta, sem
+  recalcular). Descartada: o usuário preferiu manter um número acionável
+  mesmo fora do prazo, em vez de só sinalizar o atraso.
+
+### Consequências positivas
+
+- Escopo pequeno e isolado — não toca nenhum dos 6 pontos de agregação
+  protegidos na v0.3.33, não risca `RN031`/`transferService`.
+- Fórmula de simulação cobre os 3 estados reais sem caso de borda quebrado
+  (divisão por zero), testável isoladamente em `cofrinhoService.js`.
+
+### Consequências negativas ou riscos
+
+- Ledger desacoplado de `trans` significa que o saldo "guardado" no
+  cofrinho não é, de fato, retirado da conta corrente no modelo de dados —
+  é responsabilidade do usuário considerar isso ao planejar o saldo real
+  disponível. Documentado como escolha consciente, não como bug.
+
+### Impacto em LocalStorage
+
+Nova chave `cofrinhos` (array), aditiva. Entra em `BACKUP_STORAGE_KEYS` e em
+`normalizeBackupPayload()` com fallback `[]` para backups antigos sem essa
+chave (RN002). Sem bump de `LS_VERSION`.
+
+### Impacto em regra de negócio
+
+Formaliza `RN032` (nova). Não altera nenhuma RN existente — em particular,
+não altera `RN031` (transferência) nem `RN004` (saldo por conta), já que o
+ledger de Cofrinhos não participa desses cálculos.
+
+## DEC-0036 — Escopo real do fix de complexidade quadrática do saldo (v0.3.35)
+
+Data: 2026-08-16
+
+### Contexto
+
+O item E4 ("complexidade quadrática do cálculo de saldo") está no backlog
+desde a sessão de 2026-07-05, sempre como rótulo — nenhuma sessão anterior
+havia localizado a causa exata no código. Análise desta sessão localizou:
+`movimentoContaMes` (`App.jsx:2201-2208`) filtra **todo** o array `trans`
+(O(N)) a cada chamada; `getSaldoInicialConta` (`App.jsx:2215-2221`) é
+recursiva e, quando não há saldo manual override, chama
+`movimentoContaMes` uma vez por mês desde `baseSaldoMonth` — custo O(M×N)
+por chamada, O(C×M×N) somando as `C` contas em `saldoInicialTotal`
+(Dashboard) e `saldoContaFinal` (aba Contas). Como `M` (meses de uso) e `N`
+(transações) crescem juntos num app de uso contínuo, o custo real tende a
+O(M²) ao longo dos anos.
+
+Dois achados corrigem a expectativa do roadmap:
+1. **Memoização React (`useMemo`/`useCallback`) não resolve isso.** Só evita
+   recálculo em re-renders não relacionados; ao trocar o mês selecionado ou
+   editar uma transação (uso normal), o custo O(M×N) volta a acontecer. O
+   fix precisa ser algorítmico, não de cache.
+2. **Não existe hoje nenhum teste para o cálculo de saldo** — vive inline em
+   `useCallback` dentro do `App.jsx`, não extraído para serviço puro. Pelo
+   próprio `CLAUDE.md` ("testes de caracterização ANTES de refatorar"), o
+   fix não pode começar direto na otimização.
+
+### Decisão
+
+1. **v0.3.35 entrega o fix completo de E4**, não uma versão reduzida: extrair
+   o cálculo de saldo para `src/services/saldoService.js` novo (funções
+   puras, mesmo padrão de `transferService.js`), escrever testes de
+   caracterização travando o valor atual ANTES de qualquer mudança de
+   algoritmo, e só então substituir o algoritmo O(C×M×N) por uma versão
+   O(N + C×M): agrupar `trans` por `(contaId, mês)` numa única passada
+   (O(N)), e computar o saldo de cada conta como soma prefixada sobre esse
+   agrupamento (O(M) por conta, sem re-filtrar `trans` a cada mês).
+2. **Absorve o item 3 do roadmap** ("auditar recomputações
+   `useMemo`/`useCallback` em Dashboard/Projeções") dentro do trabalho de
+   E4, em vez de tratá-lo como item separado — a auditoria de memória na
+   área de saldo acontece naturalmente ao extrair e reestruturar o cálculo;
+   um item separado arriscaria remexer a mesma área duas vezes.
+3. Code-splitting de `pdfjs-dist` (chunk >500kB) segue como item
+   independente da mesma versão — sem relação técnica com o fix de saldo,
+   baixo risco (uso já isolado em `extractPdfTextFromFile`, atrás de
+   `impMode==="vale"`).
+
+### Alternativas avaliadas
+
+- **Só code-splitting nesta versão, adiar E4 para versão dedicada.**
+  Descartada por decisão do usuário (2026-08-16): preferiu entregar o fix
+  completo agora, já que a extração para serviço puro é pré-requisito de
+  qualquer correção real, não um adicional.
+- **Fix só de memoização (`useMemo` em cima do cálculo atual), sem mudar o
+  algoritmo.** Descartada: não resolve o problema, só empurra o custo para
+  a primeira renderização após qualquer edição — falsa sensação de
+  resolvido.
+
+### Consequências positivas
+
+- Resolve E4 de fato (algoritmo O(N + C×M)), não um band-aid de cache.
+- Cria a primeira suíte de testes para cálculo de saldo — RN021 (cálculos
+  centralizados/testáveis) passa a ter cobertura real nessa área.
+- Evita retrabalho ao não tratar a auditoria de memória como item separado.
+
+### Consequências negativas ou riscos
+
+- Maior superfície de mudança nesta versão do que uma correção só de cache
+  teria — mitigado pelos testes de caracterização escritos antes de tocar
+  no algoritmo (mesmo padrão usado com sucesso em `transferService`/
+  `projectionService` na v0.3.33).
+- `saldoContaFinal`/`getSaldoInicialConta`/`movimentoContaMes` são usados em
+  múltiplos pontos do `App.jsx` (Dashboard, Contas) — a extração precisa
+  preservar a assinatura de uso (ou os call sites precisam ser atualizados
+  com cuidado) para não quebrar nenhum consumidor.
+
+### Impacto em LocalStorage
+
+Nenhum. É refatoração de cálculo em memória — não toca formato de dados
+persistidos, chave, prefixo ou schema.
+
+### Impacto em regra de negócio
+
+Não altera nenhuma RN de resultado financeiro — o valor do saldo calculado
+deve permanecer idêntico (é isso que os testes de caracterização travam).
+Reforça `RN021` (consistência/centralização dos cálculos), que já previa
+esse tipo de centralização sem nunca ter sido cumprida para o saldo.
+
+## DEC-0037 — Sincronização multi-dispositivo: forma aprovada e sequenciamento
+
+Data: 2026-08-16
+
+### Contexto
+
+O usuário perguntou se não era hora de criar um backend. Investigado o
+motivador real (não estava nas premissas iniciais): o app é usado por um
+casal, cada um no seu notebook, sem sincronização entre os dois hoje. Isso
+é diferente de "quero um backend" — é "preciso que os dois LocalStorage
+cheguem a um estado consistente", um problema mais estreito e mais barato
+de resolver do que reescrever a camada de persistência do zero.
+
+O usuário propôs uma primeira forma: arquivar o JSON de backup num backend
+e, ao abrir o app, verificar se há dado mais novo para atualizar.
+
+### Decisão
+
+1. **A forma proposta (verificar/substituir pelo mais novo) foi avaliada e
+   REJEITADA.** É um "last-write-wins" por arquivo inteiro: se os dois
+   editam offline no mesmo período (uso normal de notebook, não estar
+   sempre online), quem sincronizar por último apaga silenciosamente o
+   trabalho do outro. Isso viola a invariante que o próprio `CLAUDE.md` do
+   projeto já declara como não-negociável: "persistência que falha não pode
+   falhar em silêncio." Perder um lançamento financeiro real por timing de
+   sync é pior do que não sincronizar.
+2. **Forma aprovada para qualquer análise futura**: (a) armazenamento via
+   BaaS (Firebase/Supabase ou equivalente) — não construir API/auth
+   próprios, não operar servidor; (b) merge por **id de registro +
+   timestamp de alteração**, reaproveitando que os arrays persistidos
+   (`trans`, `contas`, `cards`, ...) já têm `id` por item — mantém o mais
+   recente por registro, une os que só existem de um lado; (c) reaproveita
+   o formato de payload de `normalizeBackupPayload()`/
+   `BACKUP_STORAGE_KEYS` como base, mas a lógica de merge é nova — hoje
+   `RN018` (restauração) é "substituir tudo", não "mesclar".
+3. **Sequenciamento**: análise de impacto completa (estratégia de merge
+   linha a linha, escolha de provedor, o que muda em `RN017`/`RN018`, custo
+   de operação) fica para **depois da v0.3.35** — decisão do usuário
+   (2026-08-16). Registrado como bloco próprio `v0.3.38` em
+   `docs/07-ROADMAP-E-BACKLOG.md`, fora da numeração de features de negócio
+   por ser mudança de arquitetura.
+
+### Alternativas avaliadas
+
+- **Backend completo (API própria + auth própria + servidor operado pelo
+  usuário).** Descartada como forma preferencial: custo de construção e
+  operação desproporcional ao problema real (2 usuários, sincronizar um
+  payload), quando um BaaS resolve a mesma necessidade com muito menos
+  código e sem infraestrutura para manter.
+- **Fazer agora, em paralelo com v0.3.33/34/35.** Descartada: são três
+  frentes já abertas mexendo em persistência/cálculo; abrir uma quarta
+  mudança de arquitetura ao mesmo tempo aumenta risco sem necessidade —
+  nenhuma delas depende da sincronização para ser útil isoladamente.
+
+### Consequências positivas
+
+- Resolve a dor real (uso por duas pessoas em dispositivos separados) sem
+  descartar a arquitetura local-first que já funciona — LocalStorage
+  continua sendo a fonte de verdade local, sync é uma camada adicional.
+- Evita o risco de maior gravidade da proposta original (perda silenciosa
+  de dado financeiro por sobrescrita).
+
+### Consequências negativas ou riscos
+
+- Merge por id ainda não resolve todos os casos de conflito (ex.: o mesmo
+  registro editado dos dois lados com valores diferentes) — a estratégia
+  de resolução desses conflitos específicos fica para a análise completa,
+  não está decidida aqui.
+- Introduz dependência de um provedor externo (BaaS) e de conectividade
+  para sincronizar — o app continua funcionando offline (local-first
+  preservado), mas a sincronização em si não.
+
+### Impacto em LocalStorage
+
+Nenhum nesta sessão — é só decisão de direção e sequenciamento, sem
+código. Quando implementado, não deve exigir bump de `LS_VERSION` (a
+sincronização é uma camada acima do formato já existente).
+
+### Impacto em regra de negócio
+
+Nenhum nesta sessão. A análise futura provavelmente vai propor mudança em
+`RN018` (restauração hoje é "substituir tudo") para acomodar merge — a
+decidir formalmente quando essa análise for feita.

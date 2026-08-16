@@ -464,3 +464,38 @@ Créditos identificados na importação de fatura de cartão (`tipo:"receita"`, 
 - O sistema não deve permitir salvar um crédito de reparcelamento/estorno em competência cuja fatura já esteja fechada, sem antes reabrir a fatura (mesma regra de RN012 para lançamentos novos).
 - A ausência de classificação não deve resultar em importação automática do crédito na competência do lote (regra anterior a esta era considerada incorreta).
 - Ao classificar a linha (e informar a competência de destino, quando exigida), ela deve ser marcada automaticamente para importação — o usuário não deve precisar marcá-la manualmente depois de classificá-la (bug corrigido na v0.3.30.1: a linha ficava desbloqueada, mas permanecia desmarcada).
+
+---
+
+## RN031 — Transferência entre contas
+
+Transferência entre contas cadastradas é movimento nulo: sai de uma conta e entra em outra, sem representar receita nem despesa do usuário. Formaliza o que `RN004` já previa ("O saldo final do mês deve considerar saldo inicial, receitas, despesas, transferências e pagamentos") mas nunca teve modelo próprio. Ver `DEC-0034`.
+
+### Critérios
+
+- Uma transferência é composta por **duas transações ligadas** por um `transferId` comum: uma saída (`tipo:"despesa"`) na conta de origem e uma entrada (`tipo:"receita"`) na conta de destino, ambas com `natureza:"transferencia"` e `origem:"corrente"`.
+- O campo `tipo` de cada perna continua determinando o sinal no saldo da conta (RN004) — não existe um `tipo` novo para transferência.
+- O campo `natureza:"transferencia"` deve excluir as duas pernas de todo total de receita e despesa (Dashboard, gráfico de categorias, projeções) — transferência não é receita nem despesa do usuário.
+- Transferência não deve ser classificada em categoria (`catId`) nem entrar no detalhamento por categoria.
+- As duas pernas devem ser criadas, editadas e excluídas como uma unidade atômica (nunca uma perna sem a outra).
+- Transferência para/de conta vinculada a cartão de crédito (RN010) está fora do escopo desta regra — cartão continua isolado por RN011/RN012.
+- Auto-detecção de transferência na importação (débito numa conta cadastrada casando com crédito em outra, mesmo valor, dentro de uma janela de dias) nunca vincula automaticamente sem confirmação do usuário na prévia.
+- As duas pernas são cobertas pelo backup/restauração pela mesma fronteira de `trans` já existente (RN017/RN018); o `transferId` deve sobreviver ao ciclo de exportação/importação de backup.
+
+---
+
+## RN032 — Cofrinhos (objetivos de poupança)
+
+Cofrinho é um objetivo de poupança com valor-alvo e data-alvo, com ledger próprio de aportes/retiradas manuais — independente de conta corrente e de `trans`. Não deve ser confundido com `RN` de Metas (orçamento/limite por categoria, `metas[catId]`), que é uma entidade totalmente diferente. Ver `DEC-0035`.
+
+### Critérios
+
+- Persistido em nova chave `cofrinhos` (array), aditiva — cada item tem `{ id, nome, valorAlvo, dataAlvo, aportes:[{ id, data, valor, tipo:"aporte"|"retirada" }], arquivado? }`.
+- **O ledger de aportes/retiradas é isolado**: não gera transação em `trans`, não afeta saldo de conta, não é transferência (RN031) nem receita/despesa. O saldo do cofrinho é só a soma dos aportes menos retiradas do próprio array.
+- Saldo do cofrinho = `Σ aportes − Σ retiradas`. Nunca pode ficar negativo por uma retirada maior que o saldo disponível — a UI deve bloquear essa retirada.
+- **Simulação de aporte mensal**: `(valorAlvo − saldoAtual) / meses restantes até a dataAlvo`, calculado a partir do mês atual.
+  - Se a dataAlvo já é o mês atual ou já passou e a meta não foi atingida, o cofrinho fica com status **"Atrasado"** e o aporte sugerido é recalculado como se a meta fosse o mês seguinte (nunca divide por zero, nunca mostra valor negativo).
+  - Se `saldoAtual >= valorAlvo`, status **"Concluído"**, sem sugestão de aporte.
+  - Caso contrário, status **"Em dia"**, com o aporte mensal calculado normalmente.
+- Cofrinho arquivado (`arquivado:true`) sai das listagens ativas mas mantém o histórico de aportes — exclusão lógica (RN020), não exclusão física.
+- Entra em `BACKUP_STORAGE_KEYS`, backup/restauração e é lido com default seguro `[]` para backups antigos sem essa chave (RN002/RN017/RN018) — sem bump de `LS_VERSION`.

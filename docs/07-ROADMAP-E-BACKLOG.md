@@ -924,7 +924,17 @@ após aprovação da v0.3.31. Ver `DEC-0033`.
 
 Planejado em 2026-07-08 (reprioriza o slot; performance/importação/
 modularização desceram para v0.3.35/36/37). Decisões do usuário registradas
-abaixo; detalhe conceitual a virar `DEC-00XX` antes de codificar.
+abaixo. Modelo de dados e sequenciamento formalizados em `DEC-0034` e
+`RN031` (2026-08-16), após análise de impacto que corrigiu duas premissas
+deste planejamento original: (1) o risco real de agregação são 6 pontos, não
+"~57"; (2) `params.duplaEntradaDias` não tem motor de detecção implementado
+— a Fase 2 constrói esse matcher do zero, não reaproveita.
+
+**Sequenciamento (DEC-0034, adendo 2026-08-16):** Fase 1 e Fase 2 entregues
+na mesma sessão/tag `v0.3.33.0`, por decisão do usuário de acelerar — o
+plano original previa Fase 2 só depois da Fase 1 validada em uso real de
+produção; a validação real usada foi a de preview (`npm run dev`), não uso
+de produção.
 
 **Objetivo:** transferência entre contas cadastradas é movimento nulo (sai de
 uma, entra na outra) e **não** deve contar como receita nem despesa — só
@@ -947,27 +957,47 @@ afeta o saldo das contas envolvidas.
 
 **Escopo funcional (decisão do usuário: manual + auto-detecção na importação):**
 
-- [ ] Criar transferência manual: escolher conta origem, conta destino, valor
+- [x] Criar transferência manual: escolher conta origem, conta destino, valor
   e data → gera o par ligado atomicamente (padrão snapshot completo).
-- [ ] Desfazer/editar transferência tratando as duas pernas como uma unidade.
-- [ ] Auto-detectar na importação: débito numa conta cadastrada que casa com
-  crédito em outra (mesmo valor, janela de dias — reusar
-  `params.duplaEntradaDias`), oferecendo vincular como transferência na
-  prévia. Não vincular automaticamente sem confirmação.
-- [ ] Exibir transferências de forma distinta na aba Lançamentos (não como
-  entrada/saída) e garantir que filtros e saldos batam.
-- [ ] Incluir no backup/restauração (as pernas já são `trans`, então cobertas;
-  validar que o `transferId` sobrevive ao ciclo).
+  **ENTREGUE v0.3.33.0** (`transferService.createTransfer`, botão "🔁
+  Transferir" na aba Lançamentos).
+- [x] Desfazer/editar transferência tratando as duas pernas como uma unidade.
+  **PARCIAL v0.3.33.0**: exclusão atômica das duas pernas com toast
+  "Desfazer" entregue. Edição (mudar valor/data/contas de uma transferência
+  já existente) não entrou nesta fase — hoje o caminho é excluir e recriar.
+- [x] Auto-detectar na importação: débito numa conta cadastrada que casa com
+  crédito em outra (mesmo valor, janela de dias). **ENTREGUE v0.3.33.0**
+  (`transferMatchService.findTransferMatchCandidates`/
+  `linkImportedRowAsTransfer`, checkbox "🔁 Possível transferência" na
+  prévia de importação bancária, nunca vincula sem confirmação explícita).
+  `params.duplaEntradaDias` era só um campo de configuração sem consumidor
+  — o matcher foi escrito do zero, reaproveitando só o nome/janela do
+  parâmetro.
+- [x] Exibir transferências de forma distinta na aba Lançamentos (não como
+  entrada/saída) e garantir que filtros e saldos batam. **ENTREGUE
+  v0.3.33.0** (badge "🔁 Transferência", saldos validados no preview).
+- [x] Incluir no backup/restauração (as pernas já são `trans`, então cobertas;
+  validar que o `transferId` sobrevive ao ciclo). **Coberto por construção**
+  — `trans` já está em `BACKUP_STORAGE_KEYS`, `transferId` é só mais um
+  campo do registro.
 
-**Riscos:** mudança transversal na agregação (maior risco da versão);
-consultar `especialista-financas` (RN de saldo/previsto-realizado) e
-`arquiteto-operacoes-atomicas` (par atômico). Não bumpar `LS_VERSION`.
+**Riscos:** mudança transversal na agregação (maior risco da versão) —
+**revisado por `DEC-0034`**: o risco real eram 6 pontos de agregação
+(`receitaCorr`/`despCorr`/`catBreakdown`/`last6` no `App.jsx` +
+`receitasItens`/`despesasItens` em `projectionService.js`), não os "~57"
+estimados aqui originalmente; `movimentoContaMes` (saldo por conta) não foi
+tocado. Não bumpou `LS_VERSION`. Ver `RN031` e o changelog `[0.3.33.0]`.
 
 ### v0.3.34 — Cofrinhos (objetivos de poupança)
 
 Planejado em 2026-07-08. Nome **"Cofrinhos"** (decisão do usuário) para não
 colidir com a aba **"Metas"** já existente, que é orçamento/limite por
-categoria (`metas: {}` por `catId`) — coisa diferente.
+categoria (`metas: {}` por `catId`) — coisa diferente (confirmado sem
+colisão estrutural na análise de 2026-08-16). Modelo de dados e fórmula de
+simulação formalizados em `DEC-0035` e `RN032`: ledger isolado (aportes/
+retiradas não tocam `trans`, decisão do usuário) e fórmula de aporte mensal
+com 3 estados (Em dia/Concluído/Atrasado), corrigindo uma divisão por zero
+não tratada na fórmula original quando a dataAlvo já passou.
 
 **Objetivo:** aba para criar um objetivo com valor-alvo e data-alvo, controlar
 o saldo guardado e simular o aporte mensal necessário para atingir a meta a
@@ -976,13 +1006,16 @@ partir do mês atual.
 **Modelo de dados (NOVA entidade persistida → território `guardiao-localstorage`):**
 
 - [ ] Nova chave de LocalStorage `cofrinhos` (array). Estrutura por item
-  (proposta): `{ id, nome, valorAlvo, dataAlvo, aportes:[{ id, data, valor,
-  tipo:"aporte"|"retirada" }], cor?, icon?, arquivado? }`. Saldo = soma dos
-  aportes − retiradas (**ledger próprio, aportes manuais** — decisão do
-  usuário; sem acoplamento a contas, sem risco de dupla contagem).
-- [ ] Entrar em `BACKUP_STORAGE_KEYS`, backup/restauração e no
-  `migrationPipeline` com default seguro `[]` para dados antigos (RN002).
-  Aditivo — **sem bump de `LS_VERSION`**.
+  (RN032): `{ id, nome, valorAlvo, dataAlvo, aportes:[{ id, data, valor,
+  tipo:"aporte"|"retirada" }], arquivado? }`. Saldo = soma dos
+  aportes − retiradas (**ledger próprio, aportes manuais, isolado de
+  `trans`** — decisão do usuário; sem acoplamento a contas, sem risco de
+  dupla contagem).
+- [ ] Entrar em `BACKUP_STORAGE_KEYS` (`storageKeys.js`) e em
+  `normalizeBackupPayload()` (`App.jsx`) com default seguro `[]` para
+  backups antigos (RN002). Não usa `migrationPipeline.js` — esse pipeline é
+  específico do formato interno de `trans`, não se aplica a uma chave nova
+  isolada. Aditivo — **sem bump de `LS_VERSION`**.
 
 **Escopo funcional:**
 
@@ -1000,16 +1033,25 @@ existente; adiciona entidade nova.
 
 ### v0.3.35 — Performance e cálculo
 
-- [ ] Corrigir a complexidade quadrática do cálculo de saldo (item E4, já
-  mapeado desde a sessão de 2026-07-05) — centralizar em função memoizada
-  reaproveitável por Dashboard, Contas e Projeções (RN021).
-- [ ] Reduzir o alerta de build de chunk > 500 kB (hoje só documentado
-  como não bloqueante) via code splitting — candidato principal é o
-  parser de PDF (`pdfjs-dist`), usado só na importação de vale Pluxee e
-  carregável sob demanda (`import()` dinâmico).
-- [ ] Auditar recomputações desnecessárias em Projeções/Dashboard
-  (`useMemo`/`useCallback` já usados em parte, mas não auditados
-  sistematicamente).
+Item E4 localizado e escopo real formalizado em `DEC-0036` (2026-08-16),
+depois de ficar como rótulo sem causa identificada desde 2026-07-05.
+
+- [ ] **E4 — complexidade quadrática do cálculo de saldo, fix completo**
+  (não só cache): extrair `movimentoContaMes`/`getSaldoInicialConta`
+  (`App.jsx:2201-2221`) para `src/services/saldoService.js` novo, com
+  testes de caracterização do valor atual ANTES de mudar o algoritmo;
+  trocar o custo O(C×M×N) (recursão mês a mês, cada passo refiltrando todo
+  `trans`) por O(N + C×M) (agrupar `trans` por conta+mês numa passada só,
+  depois somar prefixado por conta). `useMemo`/`useCallback` sozinho NÃO
+  resolve — só evita recálculo em re-renders não relacionados, o custo
+  algorítmico volta a cada troca de mês/edição de lançamento.
+- [ ] **Absorve o item de auditoria de `useMemo`/`useCallback`** (não é mais
+  item separado — acontece naturalmente ao reestruturar o cálculo acima).
+- [ ] Reduzir o alerta de build de chunk > 500 kB via code splitting —
+  candidato validado: `pdfjs-dist` (`App.jsx:25-26`, uso isolado em
+  `extractPdfTextFromFile` atrás de `impMode==="vale"`) trocar os imports
+  estáticos do topo por `import()` dinâmico dentro dessa função. Item
+  independente do fix de E4, baixo risco.
 
 ### v0.3.36 — Importação avançada
 
@@ -1036,6 +1078,40 @@ existente; adiciona entidade nova.
   manualmente mais uma vez (critério já registrado em `DEC-0008`).
 - [ ] Retomar a revisão conceitual da aba Projeções (fluxo de caixa real
   vs. estimativa) mapeada na sessão de 2026-06-29, ainda não concluída.
+
+### v0.3.38 — Sincronização multi-dispositivo (casal em notebooks separados)
+
+Iniciativa nova, decidida em 2026-08-16 (`DEC-0037`), sequenciada **depois
+da v0.3.35** — não encaixada num dos blocos já planejados porque é uma
+mudança de arquitetura, não uma feature de negócio. Análise de impacto
+completa (estratégia de merge, escolha de provedor, o que muda em
+RN017/RN018) fica para quando chegar a vez; esta entrada só registra a
+decisão de perseguir e a forma que NÃO pode tomar.
+
+**Motivação real (não especulativa):** o app é usado por um casal, cada um
+no seu notebook — sem sincronização hoje, cada notebook tem seu próprio
+LocalStorage isolado.
+
+**Decisão de forma (`DEC-0037`) — vale desde já para qualquer análise futura:**
+
+- [ ] **Não é "backend" no sentido pesado.** Nada de API própria + auth
+  própria + servidor para operar. Um BaaS (Firebase/Supabase ou
+  equivalente) para guardar o payload por usuário/casal já resolve a parte
+  de armazenamento e autenticação.
+- [ ] **Não pode ser "sobrescreve com o mais novo" por arquivo inteiro.**
+  Essa forma foi avaliada e REJEITADA nesta sessão: se os dois editam
+  offline no mesmo período, o último a sincronizar apaga silenciosamente o
+  trabalho do outro — viola a invariante do próprio `CLAUDE.md`
+  ("persistência que falha não pode falhar em silêncio").
+- [ ] **Precisa ser merge por id de registro + timestamp**, não por
+  timestamp do arquivo: os arrays (`trans`, `contas`, `cards`, ...) já têm
+  `id` por item — mesclar mantendo o mais recente por registro e unindo os
+  que só existem de um lado.
+- [ ] Reaproveitar a estrutura de payload já validada em
+  `normalizeBackupPayload()`/`BACKUP_STORAGE_KEYS` como base do formato
+  sincronizado — mas a rotina de restauração hoje é "substituir tudo"
+  (RN018), não "mesclar"; isso precisa virar uma lógica nova, não uma
+  reaproveitada.
 
 ### Backlog aberto (sem versão agendada, baixa prioridade)
 

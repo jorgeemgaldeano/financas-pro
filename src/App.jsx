@@ -4,6 +4,8 @@ import { DateInput } from "./components/ui/DateInput.jsx";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog.jsx";
 import { useToasts, ToastHost } from "./components/ui/Toast.jsx";
 import { moveCardTransactions, moveAccountTransactions, recategorizeCategory } from "./services/reassignmentService.js";
+import { createTransfer, deleteTransfer, isTransfer } from "./services/transferService.js";
+import { findTransferMatchCandidates, linkImportedRowAsTransfer, revertTransferLinksFromBatch } from "./services/transferMatchService.js";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
 import { guessCategoryForTransaction, normText } from "./services/categoryService.js";
 import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
@@ -25,7 +27,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-const APP_VERSION = "0.3.32.1";
+const APP_VERSION = "0.3.33.0";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -2147,6 +2149,10 @@ export default function App() {
   const [impFile,  setImpFile]  = useState("");
   const [impDups,  setImpDups]  = useState(new Set());
   const [impIgnored, setImpIgnored] = useState([]);
+  // v0.3.33 (Fase 2 — DEC-0034/RN031): vínculos de transferência CONFIRMADOS
+  // pelo usuário na prévia de importação bancária. { [row._id]: existingTransactionId }.
+  // Nunca preenchido automaticamente — só via ação explícita na linha (ver UI abaixo).
+  const [impTransferLinks, setImpTransferLinks] = useState({});
   const [lastImportReport, setLastImportReport] = useState(null);
   const [requiredModal, setRequiredModal] = useState(null);
   const [expandedCards, setExpandedCards] = useState({});
@@ -2236,11 +2242,12 @@ export default function App() {
   }, [trans, selMonth]);
 
   // Receitas/despesas realizadas = valores pagos/baixados. Previstos não impactam saldo realizado.
-  const receitaCorr  = useMemo(()=>monthTrans.filter(t=>t.tipo==="receita"&&t.origem==="corrente").reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
+  // RN031: transferência entre contas não é receita nem despesa — exclui natureza:"transferencia".
+  const receitaCorr  = useMemo(()=>monthTrans.filter(t=>t.tipo==="receita"&&t.origem==="corrente"&&!isTransfer(t)).reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
   const receitaVales = useMemo(()=>monthTrans.filter(t=>t.tipo==="receita"&&(t.origem==="vale_alimentacao"||t.origem==="vale_refeicao")).reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
   const receitas     = receitaCorr + receitaVales;
 
-  const despCorr  = useMemo(()=>monthTrans.filter(t=>t.tipo==="despesa"&&t.origem==="corrente").reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
+  const despCorr  = useMemo(()=>monthTrans.filter(t=>t.tipo==="despesa"&&t.origem==="corrente"&&!isTransfer(t)).reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
   const despVales = useMemo(()=>monthTrans.filter(t=>t.tipo==="despesa"&&(t.origem==="vale_alimentacao"||t.origem==="vale_refeicao")).reduce((s,t)=>s+valorRealizado(t),0),[monthTrans]);
   const despCorrTotal = despCorr + despVales;
 
@@ -2264,13 +2271,14 @@ export default function App() {
     return flattenCats([root]).map(cat => cat.id);
   }, [cats, projectionFilters.rootCatId]);
 
+  // RN031: transferência não entra em categoria nem no gráfico de despesas.
   const catBreakdown = useMemo(()=>{
     const map={};
-    monthTrans.filter(t=>t.tipo==="despesa").forEach(t=>{ const root=findRootCat(cats,t.catId)?.nome||"Outros"; map[root]=(map[root]||0)+t.valor; });
+    monthTrans.filter(t=>t.tipo==="despesa"&&!isTransfer(t)).forEach(t=>{ const root=findRootCat(cats,t.catId)?.nome||"Outros"; map[root]=(map[root]||0)+t.valor; });
     return Object.entries(map).map(([cat,val])=>({ cat,val, color:cats.find(c=>c.nome===cat)?.cor||"#B0BEC5" })).sort((a,b)=>b.val-a.val);
   },[monthTrans,cats]);
 
-  const last6 = useMemo(()=>Array.from({length:6},(_,i)=>{ const dt=new Date(Y,M-5+i,1),k=dt.toISOString().slice(0,7); return { label:MONTHS[dt.getMonth()], value:trans.filter(t=>t.tipo==="despesa"&&transMonthKey(t)===k).reduce((s,t)=>s+t.valor,0) }; }),[trans]);
+  const last6 = useMemo(()=>Array.from({length:6},(_,i)=>{ const dt=new Date(Y,M-5+i,1),k=dt.toISOString().slice(0,7); return { label:MONTHS[dt.getMonth()], value:trans.filter(t=>t.tipo==="despesa"&&!isTransfer(t)&&transMonthKey(t)===k).reduce((s,t)=>s+t.valor,0) }; }),[trans]);
 
   const cardTotals = useMemo(()=>cards.map(c=>{
     const fat = calcularFaturaCartao(c, selMonth);
@@ -2929,6 +2937,42 @@ export default function App() {
     return res;
   };
 
+  // ── Transferência entre contas (v0.3.33, Fase 1 — DEC-0034 / RN031) ────────
+  // transferService: par atômico (snapshot completo de trans), aplicado num
+  // único setTrans. Movimento nulo — não é receita nem despesa (RN031).
+  const TRANSFER_REASON_MSG = {
+    account_not_found: "Escolha as duas contas.",
+    same_account: "Escolha uma conta de destino diferente da origem.",
+    invalid_amount: "Informe um valor maior que zero.",
+    missing_date: "Informe a data da transferência.",
+  };
+
+  const realizarTransferencia = () => {
+    const res = createTransfer({ trans, contas }, {
+      fromAccountId: form.fromAccountId,
+      toAccountId: form.toAccountId,
+      valor: moneyToNumber(form.valor),
+      data: form.data,
+      descricao: form.descricao,
+      uid,
+    });
+    if (!res.ok) { alert(TRANSFER_REASON_MSG[res.reason] || "Não foi possível criar a transferência."); return; }
+    setTrans(res.trans);
+    closeModal();
+  };
+
+  const excluirTransferencia = (transferId) => {
+    const before = trans;
+    const res = deleteTransfer({ trans }, { transferId });
+    if (!res.ok) return res;
+    setTrans(res.trans);
+    pushToast({
+      message: "Transferência excluída.",
+      onUndo: () => setTrans(before),
+    });
+    return res;
+  };
+
   // Recategoriza por completo: move todos os lançamentos/despesas de `fromCatId`
   // (e descendentes) para `toCatId`. A categoria de origem permanece (o usuário
   // decide depois se a exclui).
@@ -3045,6 +3089,7 @@ export default function App() {
       setImpDups(dups);
       setImpTog(Object.fromEntries(rows.map(r2=>[r2._id,!dups.has(r2._id) && !(impMode==="cartao" && isCardCreditRowBlocked(r2))])));
       setImpRows(rows);
+      setImpTransferLinks({});
       setImpStep("review");
     };
 
@@ -3073,6 +3118,19 @@ export default function App() {
     if((impMode==="bancario"||impMode==="vale")&&!impContaId){ setImpErr("Selecione a conta de destino."); return; }
     const destinationId = impMode === "cartao" ? impCId : impContaId;
     const selectedRows = impRows.filter(r=>impTog[r._id]);
+    // v0.3.33 (Fase 2 — DEC-0034/RN031): duas linhas não podem vincular a
+    // transferência para a MESMA transação já existente — ambíguo e, se
+    // permitido, a segunda tentativa de vínculo falharia silenciosamente
+    // (already_linked) e cairia como despesa comum sem o usuário perceber.
+    if(impMode==="bancario"){
+      const linkedTargets = selectedRows.map(r=>impTransferLinks[r._id]).filter(Boolean);
+      const seenTargets = new Set();
+      const targetDuplicado = linkedTargets.find(id=>{ if(seenTargets.has(id)) return true; seenTargets.add(id); return false; });
+      if(targetDuplicado){
+        setImpErr("Duas linhas selecionadas estão vinculadas à mesma transação de destino. Ajuste os vínculos de transferência (🔁) antes de confirmar.");
+        return;
+      }
+    }
     if(impMode==="cartao" && selectedRows.some(r=>isCardCreditRowBlocked(r))){
       setImpErr("Classifique todos os créditos selecionados (pagamento de fatura anterior, reparcelamento de compra à vista ou estorno) antes de importar.");
       return;
@@ -3132,11 +3190,47 @@ export default function App() {
     };
     if(impMode==="bancario"||impMode==="vale"){
       const conta=contas.find(c=>c.id===impContaId);
-      setTrans(p=>[...p,...okFinal.map(r=>({
-        id:uid(), tipo:r.tipo, origem:conta?.tipo||"corrente", cartaoId:null, contaId:impContaId,
-        catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data,
-        fixo:false, importado:true, importTipo:impMode, bancoImportacao:impMode==="bancario"?impBanco:null, fornecedorVale:r.fornecedorVale||null, carteiraVale:r.carteiraVale||null, hora:r.hora||null, importBatchId, status:"pago", valorPago:r.valor, competencia:mKey(r.data),
-      }))]);
+      // v0.3.33 (Fase 2 — DEC-0034/RN031): linhas com vínculo de transferência
+      // CONFIRMADO pelo usuário (impTransferLinks) não viram despesa comum —
+      // a transação de crédito já existente é convertida em perna de entrada
+      // e só a perna de saída é criada nova (ver transferMatchService.js).
+      const linkedRows = impMode==="bancario" ? okFinal.filter(r=>impTransferLinks[r._id]) : [];
+      const linkedIds = new Set(linkedRows.map(r=>r._id));
+      const normalRows = okFinal.filter(r=>!linkedIds.has(r._id));
+      setTrans(prev=>{
+        let next=[...prev,...normalRows.map(r=>({
+          id:uid(), tipo:r.tipo, origem:conta?.tipo||"corrente", cartaoId:null, contaId:impContaId,
+          catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data,
+          fixo:false, importado:true, importTipo:impMode, bancoImportacao:impMode==="bancario"?impBanco:null, fornecedorVale:r.fornecedorVale||null, carteiraVale:r.carteiraVale||null, hora:r.hora||null, importBatchId, status:"pago", valorPago:r.valor, competencia:mKey(r.data),
+        }))];
+        linkedRows.forEach(r=>{
+          const res = linkImportedRowAsTransfer({ trans: next }, {
+            existingTransactionId: impTransferLinks[r._id],
+            sourceContaId: impContaId,
+            valor: r.valor,
+            data: r.data,
+            descricao: r.descricao,
+            importBatchId,
+            importTipo: impMode,
+            bancoImportacao: impBanco,
+            uid,
+          });
+          if(res.ok){
+            next = res.trans;
+          } else {
+            // Fallback conservador: se o vínculo não puder ser aplicado (ex.:
+            // a transação de destino mudou de estado entre a prévia e a
+            // confirmação), a linha NUNCA é descartada silenciosamente — cai
+            // como despesa comum, igual ao comportamento sem vínculo.
+            next = [...next, {
+              id:uid(), tipo:r.tipo, origem:conta?.tipo||"corrente", cartaoId:null, contaId:impContaId,
+              catId:r.catId, descricao:r.descricao, valor:r.valor, data:r.data,
+              fixo:false, importado:true, importTipo:impMode, bancoImportacao:impMode==="bancario"?impBanco:null, importBatchId, status:"pago", valorPago:r.valor, competencia:mKey(r.data),
+            }];
+          }
+        });
+        return next;
+      });
     } else {
       setTrans(p=>[...p,...okFinal.map(r=>({
         id:uid(), tipo:r.tipo||"despesa", origem:"cartao", cartaoId:impCId, contaId:null,
@@ -3149,7 +3243,34 @@ export default function App() {
     setLastImportReport(reportBase);
     setImpStep("done");
   };
-  const resetImport=()=>{ setImpStep("upload"); setImpRows([]); setImpTog({}); setImpErr(""); setImpFile(""); setImpDups(new Set()); setImpIgnored([]); };
+  const resetImport=()=>{ setImpStep("upload"); setImpRows([]); setImpTog({}); setImpErr(""); setImpFile(""); setImpDups(new Set()); setImpIgnored([]); setImpTransferLinks({}); };
+
+  // v0.3.33 (Fase 2 — DEC-0034/RN031): candidatos a transferência entre
+  // contas na importação bancária. Só CALCULA — nunca vincula sozinho (ver
+  // toggleTransferLink, acionado explicitamente pelo usuário na prévia).
+  const transferMatchCandidates = useMemo(() => {
+    if (impMode !== "bancario" || !impContaId) return {};
+    return findTransferMatchCandidates({
+      rows: impRows,
+      trans,
+      contas,
+      sourceContaId: impContaId,
+      duplaEntradaDias: params.duplaEntradaDias,
+    });
+  }, [impMode, impContaId, impRows, trans, contas, params.duplaEntradaDias]);
+
+  // Alterna o vínculo de transferência de uma linha. Confirmação explícita:
+  // marcar liga a candidata escolhida (a melhor, por padrão — a primeira do
+  // array já ordenado por proximidade de data); desmarcar volta a linha para
+  // importação normal como despesa. RN031: nunca automático.
+  const toggleTransferLink = (rowId, transactionId) => {
+    setImpTransferLinks(prev => {
+      const next = { ...prev };
+      if (next[rowId] === transactionId) delete next[rowId];
+      else next[rowId] = transactionId;
+      return next;
+    });
+  };
 
   const installmentDivergenceRows = useMemo(() => (
     impMode === "cartao"
@@ -3231,7 +3352,12 @@ export default function App() {
     const lote=importBatches.find(b=>b.id===batchId);
     if(!lote) return;
     if(!window.confirm(`Desfazer o lote ${batchId}? ${lote.qtd} lançamento(s) importado(s) serão removidos.`)) return;
-    setTrans(prev=>prev.filter(t=>t.importBatchId!==batchId));
+    // v0.3.33 (Fase 2 — DEC-0034/RN031): antes de remover as linhas do lote,
+    // reverte qualquer conversão de crédito em transferência originada dele —
+    // a perna de saída nova (deste lote) é removida pelo filtro abaixo, mas a
+    // perna de crédito convertida (de OUTRO lote/manual) só volta a ser um
+    // lançamento comum, nunca é apagada (ver transferMatchService.js).
+    setTrans(prev=>revertTransferLinksFromBatch(prev, batchId).filter(t=>t.importBatchId!==batchId));
     if(lastImportReport?.id===batchId) setLastImportReport(null);
   };
 
@@ -3662,7 +3788,10 @@ export default function App() {
                   ? "Filtro por período ativo"
                   : `Exibindo mês selecionado: ${formatMonthBR(selMonth)}`}
               </div>
-              <button onClick={openAddTrans} style={btn(C.emerald)}>+ Novo Lançamento</button>
+              <div style={{ display:"flex", gap:9 }}>
+                <button onClick={()=>{ setForm({ fromAccountId:contasCorrentes[0]?.id||"", toAccountId:contasCorrentes[1]?.id||"", data:todayIso() }); setModal("addTransfer"); }} style={btn("#0891B2")} disabled={contasCorrentes.length<2}>🔁 Transferir</button>
+                <button onClick={openAddTrans} style={btn(C.emerald)}>+ Novo Lançamento</button>
+              </div>
             </div>
 
             <TransactionFiltersPanel
@@ -3691,10 +3820,10 @@ export default function App() {
                         {t.importado&&<span style={{ marginLeft:5, fontSize:10, background:C.emerald+"22", padding:"2px 5px", borderRadius:4, color:C.emerald }}>importado</span>}
                       </td>
                       <td style={{ padding:"9px 13px", minWidth:210 }}>
-                        {renderCategoryEditor(t)}
+                        {isTransfer(t)?<span style={{ color:C.soft, fontSize:12 }}>— (transferência)</span>:renderCategoryEditor(t)}
                       </td>
                       <td style={{ padding:"9px 13px", color:C.soft, fontSize:12 }}>{t.origem==="cartao"?(cards.find(c=>c.id===t.cartaoId)?.nome||"Cartão"):t.origem==="vale_alimentacao"?"🛒 Vale Alim.":t.origem==="vale_refeicao"?"🍽️ Vale Ref.":"🏦 Corrente"}</td>
-                      <td style={{ padding:"9px 13px" }}><span style={{ color:t.tipo==="receita"?C.emerald:C.coral, fontWeight:600, fontSize:12 }}>{t.tipo==="receita"?"↑ Receita":"↓ Despesa"}</span></td>
+                      <td style={{ padding:"9px 13px" }}>{isTransfer(t)?<span style={{ color:"#0891B2", fontWeight:600, fontSize:12 }}>🔁 Transferência</span>:<span style={{ color:t.tipo==="receita"?C.emerald:C.coral, fontWeight:600, fontSize:12 }}>{t.tipo==="receita"?"↑ Receita":"↓ Despesa"}</span>}</td>
                       <td style={{ padding:"9px 13px" }}>
                         <span style={{ fontSize:11, fontWeight:700, padding:"2px 7px", borderRadius:20, background:(t.status==="previsto"?C.gold:t.status==="parcial"?"#CE93D8":C.emerald)+"22", color:t.status==="previsto"?C.gold:t.status==="parcial"?"#CE93D8":C.emerald }}>
                           {t.status==="previsto"?"Previsto":t.status==="parcial"?`Parcial (${fmtBRL(t.valorPago||0)})`:"Pago"}
@@ -3704,7 +3833,7 @@ export default function App() {
                       <td style={{ padding:"9px 13px", display:"flex", gap:5, alignItems:"center" }}>
                         {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.emerald })}>Baixar</button>}
                         {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarParcialTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Parcial</button>}
-                        <button onClick={()=>delTrans(t.id)} style={{ background:"transparent", border:"none", color:C.coral, cursor:"pointer", fontSize:16 }}>×</button>
+                        <button onClick={()=>isTransfer(t)?excluirTransferencia(t.transferId):delTrans(t.id)} style={{ background:"transparent", border:"none", color:C.coral, cursor:"pointer", fontSize:16 }}>×</button>
                       </td>
                     </tr>
                   ))}
@@ -4344,7 +4473,7 @@ export default function App() {
                       { id:"bancario", label:"🏦 Extrato bancário", hint:"Exige conta corrente/vale" },
                       { id:"vale", label:"🎫 Extrato de vale", hint:"PDF Pluxee com ano e conta de vale" },
                     ].map(opt=>(
-                      <button key={opt.id} type="button" onClick={()=>{ setImpMode(opt.id); setImpErr(""); setImpRows([]); setImpTog({}); setImpDups(new Set()); }} style={{ ...ghost(), textAlign:"left", padding:"10px 12px", color:impMode===opt.id?C.text:C.soft, borderColor:impMode===opt.id?C.emerald:C.border, background:impMode===opt.id?C.emerald+"18":"transparent" }}>
+                      <button key={opt.id} type="button" onClick={()=>{ setImpMode(opt.id); setImpErr(""); setImpRows([]); setImpTog({}); setImpDups(new Set()); setImpTransferLinks({}); }} style={{ ...ghost(), textAlign:"left", padding:"10px 12px", color:impMode===opt.id?C.text:C.soft, borderColor:impMode===opt.id?C.emerald:C.border, background:impMode===opt.id?C.emerald+"18":"transparent" }}>
                         <div style={{ fontWeight:700, fontSize:13 }}>{opt.label}</div>
                         <div style={{ fontSize:11, color:C.soft, marginTop:2 }}>{opt.hint}</div>
                       </button>
@@ -4386,6 +4515,25 @@ export default function App() {
                           <td style={{ padding:"8px 11px", color:C.soft, whiteSpace:"nowrap" }}>{fmtDate(r.data)}</td>
                           <td style={{ padding:"8px 11px", color:r.tipo==="receita"?C.emerald:C.soft, whiteSpace:"nowrap", fontWeight:impMode!=="cartao"?700:400 }}>{impMode==="cartao"?(isCredit?(resolveCardCreditCompetencia(r, impCompetencia)||"—"):r.competencia):(r.tipo==="receita"?"Receita":"Despesa")}</td>
                           <td style={{ padding:"8px 11px" }}><div>{r.descricao}</div>{r.importadoFuturo&&<div style={{ fontSize:10, color:C.soft }}>gerado automaticamente para parcela futura</div>}{r._cardInstallmentStatus==="novo_parcelamento"&&<div style={{ fontSize:10, color:C.emerald }}>parcelamento novo controlado internamente</div>}{isDup&&<div style={{ fontSize:10, color:C.gold }}>⚠ {r._cardInstallmentReason || "duplicata desprezada por padrão"}</div>}{r._cardInstallmentCanCorrectSequence&&<div style={{ fontSize:10, color:C.gold, marginTop:5 }}>⚠ Divergência listada para análise manual no painel abaixo.</div>}
+                            {/* v0.3.33 (Fase 2 — DEC-0034/RN031): a heurística só CALCULA
+                                candidatos (transferMatchCandidates); o vínculo em si só
+                                acontece se o usuário marcar esta caixa explicitamente. */}
+                            {impMode==="bancario"&&r.tipo==="despesa"&&transferMatchCandidates[r._id]?.length>0&&(()=>{
+                              const cands=transferMatchCandidates[r._id];
+                              const linkedId=impTransferLinks[r._id];
+                              const selected=cands.find(c=>c.transactionId===linkedId)||cands[0];
+                              return (
+                                <div style={{ marginTop:6, padding:"6px 8px", borderRadius:6, background:linkedId?"#0891B222":C.navy, border:`1px solid ${linkedId?"#0891B2":C.border}` }}>
+                                  <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, cursor:"pointer", color:linkedId?"#0891B2":C.soft, fontWeight:linkedId?700:400 }}>
+                                    <input type="checkbox" checked={!!linkedId} onChange={()=>toggleTransferLink(r._id, selected.transactionId)}/>
+                                    🔁 Possível transferência para <strong>{selected.contaNome}</strong> ({fmtDate(selected.data)}{selected.diffDias===0?", mesmo dia":`, ${selected.diffDias}d de diferença`})
+                                  </label>
+                                  {cands.length>1&&<select style={{ ...inp, fontSize:10, padding:"2px 5px", marginTop:4 }} value={selected.transactionId} disabled={!linkedId} onChange={e=>toggleTransferLink(r._id, e.target.value)}>
+                                    {cands.map(c=><option key={c.transactionId} value={c.transactionId}>{c.contaNome} · {fmtDate(c.data)} · {fmtBRL(c.valor)}</option>)}
+                                  </select>}
+                                </div>
+                              );
+                            })()}
                             {isCredit&&<div style={{ marginTop:6, display:"flex", flexDirection:"column", gap:4 }}>
                               <select style={{ ...inp, fontSize:11, padding:"3px 7px" }} value={r.creditoTipo||""} onChange={e=>{ const v=e.target.value||null; const nextCreditoCompetencia=v===CARD_CREDIT_TYPES.PARCELAMENTO_AVISTA?(r.competencia||impCompetencia):null; setImpRows(p=>p.map(x=>x._id===r._id?{...x,creditoTipo:v,creditoCompetencia:nextCreditoCompetencia}:x)); if(!isCardCreditRowBlocked({ ...r, creditoTipo:v, creditoCompetencia:nextCreditoCompetencia })) setImpTog(p=>({...p,[r._id]:true})); }}>
                                 <option value="">⚠ Classifique este crédito</option>
@@ -4399,7 +4547,7 @@ export default function App() {
                               {creditBlocked&&<div style={{ fontSize:10, color:C.coral }}>Selecione a classificação{r.creditoTipo&&r.creditoTipo!==CARD_CREDIT_TYPES.PAGAMENTO_FATURA_ANTERIOR?" e a competência de destino":""} para liberar esta linha.</div>}
                             </div>}
                           </td>
-                          <td style={{ padding:"8px 11px" }}><CategorySelect cats={cats} value={r.catId} onChange={v=>setImpRows(p=>p.map(x=>x._id===r._id?{...x,catId:v}:x))} style={{ fontSize:11, padding:"3px 7px", width:"auto" }}/></td>
+                          <td style={{ padding:"8px 11px" }}>{impTransferLinks[r._id]?<span style={{ fontSize:11, color:C.soft }}>— (transferência)</span>:<CategorySelect cats={cats} value={r.catId} onChange={v=>setImpRows(p=>p.map(x=>x._id===r._id?{...x,catId:v}:x))} style={{ fontSize:11, padding:"3px 7px", width:"auto" }}/>}</td>
                           <td style={{ padding:"8px 11px", color:C.soft, whiteSpace:"nowrap" }}>{r.parcela?`${r.parcela}/${r.totalParcelas}`:"—"}</td>
                           <td style={{ padding:"8px 11px", textAlign:"right", fontWeight:700, color:r.tipo==="receita"?C.emerald:C.coral }}>{r.tipo==="receita"?"+":"-"}{fmtBRL(r.valor)}</td>
                           <td style={{ padding:"8px 11px" }}><button onClick={()=>setImpRows(p=>p.filter(x=>x._id!==r._id))} style={{ background:"transparent", border:"none", color:C.muted, cursor:"pointer" }}>×</button></td>
@@ -4637,6 +4785,35 @@ export default function App() {
                   <button onClick={addTransaction} style={btn(C.emerald,{ flex:1 })}>
                     {form.parcelado?`Salvar ${form.parcelas||""}× parcelas`:form.fixo?`Registrar ${form.fixoMeses||""}× meses`:"Salvar"}
                   </button>
+                </div>
+              </>
+            )}
+            {modal==="addTransfer"&&(
+              <>
+                <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>Transferência entre contas</h3>
+                <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>Movimento nulo: sai de uma conta e entra em outra, sem contar como receita nem despesa (RN031).</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div>
+                    <div style={lbl}>Conta de origem</div>
+                    <select style={inp} value={form.fromAccountId||""} onChange={e=>setForm(f=>({...f,fromAccountId:e.target.value}))}>
+                      <option value="">Selecione</option>
+                      {contasCorrentes.map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={lbl}>Conta de destino</div>
+                    <select style={inp} value={form.toAccountId||""} onChange={e=>setForm(f=>({...f,toAccountId:e.target.value}))}>
+                      <option value="">Selecione</option>
+                      {contasCorrentes.filter(ct=>ct.id!==form.fromAccountId).map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}
+                    </select>
+                  </div>
+                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></div>
+                  <div><div style={lbl}>Data</div><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
+                  <div><div style={lbl}>Descrição (opcional)</div><input style={inp} placeholder="Transferência entre contas" value={form.descricao||""} onChange={e=>setForm(f=>({...f,descricao:e.target.value}))}/></div>
+                </div>
+                <div style={{ display:"flex", gap:9, marginTop:16 }}>
+                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
+                  <button onClick={realizarTransferencia} style={btn("#0891B2",{ flex:1 })}>Transferir</button>
                 </div>
               </>
             )}

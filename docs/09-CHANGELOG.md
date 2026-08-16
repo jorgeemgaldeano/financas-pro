@@ -1245,6 +1245,123 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.33.0] - 2026-08-16
+
+Bloco "v0.3.33 — Transferências entre contas" de
+`docs/07-ROADMAP-E-BACKLOG.md`, completo: Fase 1 (transferência manual) e
+Fase 2 (auto-detecção na importação). Modelo de dados e sequenciamento
+formalizados em `DEC-0034` e `RN031` após análise de impacto que corrigiu
+duas premissas do planejamento original (2026-07-08): o risco real de
+agregação são 6 pontos, não "~57", e `params.duplaEntradaDias` não tinha
+motor de detecção implementado — a Fase 2 escreveu esse matcher do zero.
+A Fase 2 foi entregue na mesma sessão, sem esperar validação isolada da
+Fase 1 em uso real, por decisão do usuário de acelerar o sequenciamento.
+
+### Adicionado
+
+- **`src/services/transferService.js`** (novo, puro/atômico): `createTransfer`
+  e `deleteTransfer`, cada um devolvendo o snapshot completo de `trans`
+  (padrão `cardInvoiceOperations`/`reassignmentService`). Uma transferência é
+  um par de transações ligadas por `transferId`, com `natureza:"transferencia"`;
+  cada perna mantém `tipo:"despesa"` (saída) / `tipo:"receita"` (entrada) —
+  o `tipo` continua decidindo o sinal em `movimentoContaMes` (App.jsx), que
+  não foi alterado. Helper `isTransfer(t)` exportado para os pontos de
+  agregação. 9 casos em `tests/transferService.test.js`.
+- **Botão "🔁 Transferir"** na aba Lançamentos (ativo com 2+ contas
+  correntes cadastradas), com modal de conta origem/destino, valor, data e
+  descrição opcional. Cria o par atomicamente com um único `setTrans`.
+- **Exclusão atômica**: o botão "×" de qualquer perna de uma transferência
+  remove as duas de uma vez (`excluirTransferencia`), com toast e
+  **Desfazer** (mesmo padrão de `reassignAndDeleteAccount`, v0.3.32).
+- **Badge visual "🔁 Transferência"** na coluna Tipo da tabela de
+  Lançamentos, substituindo "↑ Receita"/"↓ Despesa" para as duas pernas;
+  coluna Categoria mostra "— (transferência)" em vez do editor de categoria
+  (RN031: transferência não é classificada em categoria).
+- **`tests/projectionService.test.js`** (novo — primeiro arquivo de teste
+  para `projectionService.js`): caracteriza o comportamento existente
+  (receita/despesa realizadas, exclusão de `fatura_cartao`) e trava a
+  exclusão nova de `natureza:"transferencia"`, escrita antes de alterar o
+  filtro.
+- **`src/services/transferMatchService.js`** (novo, Fase 2, puro): calcula
+  candidatos a transferência na prévia de importação bancária —
+  `findTransferMatchCandidates` casa uma linha de débito importada com um
+  crédito já existente em OUTRA conta corrente cadastrada (mesmo valor,
+  dentro da janela de `params.duplaEntradaDias` dias, comparação em UTC
+  sem deslocamento de fuso). Só calcula; nunca vincula sozinho. 19 casos em
+  `tests/transferMatchService.test.js`.
+- **Prévia de importação bancária**: quando há candidato, mostra
+  "🔁 Possível transferência para `<conta>` (`<data>`, `N`d de diferença)"
+  com checkbox desmarcado por padrão; se houver mais de um candidato, um
+  select deixa escolher qual. Vínculo confirmado marca a categoria como
+  "— (transferência)" na própria prévia.
+- **`linkImportedRowAsTransfer`** (`transferMatchService.js`): ao confirmar
+  um vínculo, a transação de crédito já existente é **convertida** em
+  perna de transferência (ganha `transferId`/`natureza`/
+  `transferLinkedFromBatch`) em vez de duplicada — só a perna de saída é
+  criada como registro novo. Fallback conservador: se o vínculo falhar na
+  hora de confirmar (ex.: a transação mudou de estado entre a prévia e a
+  confirmação), a linha cai como despesa comum, nunca é descartada.
+- **Guardrail de vínculo duplicado**: duas linhas selecionadas não podem
+  vincular à mesma transação de destino — bloqueia a confirmação com
+  mensagem clara, em vez de deixar a segunda tentativa falhar em silêncio.
+- **Desfazer lote de importação** (`revertTransferLinksFromBatch`): reverte
+  a conversão de crédito em transferência originada daquele lote (volta a
+  ser lançamento comum, sem apagá-lo — pode pertencer a outro lote ou ser
+  manual); a perna de saída nova é removida pelo filtro normal do lote.
+
+### Alterado
+
+- **RN031** (nova, `docs/02-REGRAS-DE-NEGOCIO.md`): formaliza o modelo de
+  transferência, cumprindo o que `RN004` já previa ("saldo final considera
+  saldo inicial, receitas, despesas, transferências e pagamentos") sem
+  nunca ter sido implementado.
+- **6 pontos de agregação de receita/despesa passam a excluir
+  `natureza:"transferencia"`** (RN031): `receitaCorr`, `despCorr`,
+  `catBreakdown` e `last6` no Dashboard (`App.jsx`); `receitasItens` e
+  `despesasItens` em `projectionService.js`. `movimentoContaMes` (saldo por
+  conta) **não muda** — continua somando as duas pernas normalmente, que é
+  o comportamento correto (RN004).
+- Versão visual da aplicação atualizada para `v0.3.33.0`.
+
+### Migração
+
+- Nenhuma. Sem chave nova (`trans` já é coberto por `BACKUP_STORAGE_KEYS`).
+  `natureza:"transferencia"` e `transferId` são campos adicionais opcionais
+  em registros de `trans` existentes — sem bump de `LS_VERSION`, cobertos
+  pelo `migrationPipeline.js` com ausência tratada como "não é
+  transferência" (default seguro, RN002).
+
+### Testes
+
+- `npm test` (Vitest): **116/116 passando** (antes: 82/82; Fase 1 +15,
+  Fase 2 +19 de `transferMatchService`). `npm run build` aprovado (mantém o
+  alerta conhecido e não bloqueante de chunk > 500 kB).
+- Fase 1 validada no preview (`npm run dev`): criada conta "Poupança" para
+  ter 2 contas correntes; transferência de R$ 500,00 de Conta Corrente →
+  Poupança — Dashboard ("Entradas do Mês" R$ 7.900,00, "Desp. Correntes"
+  R$ 2.915,00, total "Por Categoria" R$ 3.244,80) permaneceu **idêntico**
+  ao valor antes da transferência; saldo de Conta Corrente caiu R$ 500
+  (10.845→10.345) e Poupança subiu para R$ 500 — exatamente o comportamento
+  esperado por RN031/RN004. Exclusão pelo "×" de uma perna removeu as duas
+  linhas de uma vez, com toast "Transferência excluída · Desfazer".
+- Fase 2 validada no preview: receita de R$ 250,00 em Poupança (14/08),
+  importado CSV com débito de R$ 250,00 na Conta Corrente (13/08) — a
+  prévia mostrou "🔁 Possível transferência para Poupança (14/08/2026, 1d
+  de diferença)"; marcado o checkbox, categoria virou "— (transferência)",
+  confirmada a importação. Inspecionado o LocalStorage: a transação
+  original em Poupança ganhou `transferId`/`natureza:"transferencia"` **sem
+  duplicar**, a nova perna de saída foi criada na Conta Corrente com o
+  mesmo `transferId`. Dashboard confirmou exclusão correta dos totais de
+  receita/despesa e soma correta nos saldos por conta.
+
+### Backlog não incluído nesta versão
+
+- Edição de uma transferência existente (hoje só criar/excluir; para
+  corrigir valor/data/contas, o usuário exclui e recria o par).
+- "Desfazer lote" com transferência vinculada não foi testado manualmente
+  na UI real (só cobertura unitária de `revertTransferLinksFromBatch`,
+  2 casos) — risco baixo, mas fica registrado para validação futura.
+
 ## [0.3.32.1] - 2026-07-08
 
 Patch da classificação de créditos de cartão (feature da v0.3.30), encontrado
