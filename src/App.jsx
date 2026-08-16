@@ -43,6 +43,11 @@ import { MetasTab } from "./components/organisms/MetasTab.jsx";
 import { ImportacaoTab } from "./components/organisms/ImportacaoTab.jsx";
 import { DashboardTab } from "./components/organisms/DashboardTab.jsx";
 import { ProjecoesTab } from "./components/organisms/ProjecoesTab.jsx";
+import { TransferModal } from "./components/organisms/modals/TransferModal.jsx";
+import { AddCofrinhoModal } from "./components/organisms/modals/AddCofrinhoModal.jsx";
+import { MovimentoCofrinhoModal } from "./components/organisms/modals/MovimentoCofrinhoModal.jsx";
+import { EditRecorrenciaModal } from "./components/organisms/modals/EditRecorrenciaModal.jsx";
+import { AddCardModal } from "./components/organisms/modals/AddCardModal.jsx";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
 // worker para o chunk principal, que é carregado em toda navegação.
@@ -3608,116 +3613,22 @@ export default function App() {
               </>
             )}
             {modal==="addTransfer"&&(
-              <>
-                <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>Transferência entre contas</h3>
-                <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>Movimento nulo: sai de uma conta e entra em outra, sem contar como receita nem despesa (RN031).</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <div>
-                    <div style={lbl}>Conta de origem</div>
-                    <select style={inp} value={form.fromAccountId||""} onChange={e=>setForm(f=>({...f,fromAccountId:e.target.value}))}>
-                      <option value="">Selecione</option>
-                      {contasCorrentes.map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <div style={lbl}>Conta de destino</div>
-                    <select style={inp} value={form.toAccountId||""} onChange={e=>setForm(f=>({...f,toAccountId:e.target.value}))}>
-                      <option value="">Selecione</option>
-                      {contasCorrentes.filter(ct=>ct.id!==form.fromAccountId).map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}
-                    </select>
-                  </div>
-                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></div>
-                  <div><div style={lbl}>Data</div><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
-                  <div><div style={lbl}>Descrição (opcional)</div><input style={inp} placeholder="Transferência entre contas" value={form.descricao||""} onChange={e=>setForm(f=>({...f,descricao:e.target.value}))}/></div>
-                </div>
-                <div style={{ display:"flex", gap:9, marginTop:16 }}>
-                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
-                  <button onClick={realizarTransferencia} style={btn("#0891B2",{ flex:1 })}>Transferir</button>
-                </div>
-              </>
+              <TransferModal form={form} setForm={setForm} inp={inp} lbl={lbl} contasCorrentes={contasCorrentes} closeModal={closeModal} realizarTransferencia={realizarTransferencia} />
             )}
             {modal==="addCofrinho"&&(
-              <>
-                <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>Novo cofrinho</h3>
-                <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>Ledger próprio de aportes/retiradas, independente das suas contas (RN032).</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <FormField label="Nome"><input style={inp} placeholder="Ex: Viagem, Reserva de emergência" value={form.nome||""} onChange={e=>setForm(f=>({...f,nome:e.target.value}))}/></FormField>
-                  <FormField label="Valor-alvo (R$)"><MoneyInput style={inp} value={form.valorAlvo||""} onChange={value=>setForm(f=>({...f,valorAlvo:value}))}/></FormField>
-                  <FormField label="Data-alvo"><DateInput style={inp} value={form.dataAlvo||""} onChange={value=>setForm(f=>({...f,dataAlvo:value}))}/></FormField>
-                </div>
-                <ModalFooter onCancel={closeModal} onConfirm={criarCofrinho} confirmLabel="Criar cofrinho" />
-              </>
+              <AddCofrinhoModal form={form} setForm={setForm} inp={inp} closeModal={closeModal} criarCofrinho={criarCofrinho} />
             )}
             {modal==="movimentoCofrinho"&&(
-              <>
-                <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>{form.tipoMovimento==="retirada"?"Retirada do cofrinho":"Aporte no cofrinho"}</h3>
-                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <FormField label="Valor (R$)"><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></FormField>
-                  <FormField label="Data"><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></FormField>
-                </div>
-                <ModalFooter
-                  onCancel={closeModal}
-                  onConfirm={registrarMovimentoCofrinho}
-                  confirmBg={form.tipoMovimento==="retirada"?C.coral:C.emerald}
-                  confirmLabel={form.tipoMovimento==="retirada"?"Confirmar retirada":"Confirmar aporte"}
-                />
-              </>
+              <MovimentoCofrinhoModal form={form} setForm={setForm} inp={inp} closeModal={closeModal} registrarMovimentoCofrinho={registrarMovimentoCofrinho} />
             )}
             {modal==="editRecorrencia"&&(
-              <>
-                <h3 style={{ margin:"0 0 8px", fontWeight:800 }}>Editar recorrência</h3>
-                <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>A edição altera apenas lançamentos previstos, preservando lançamentos pagos ou parciais para não distorcer o histórico.</div>
-                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <div>
-                    <div style={lbl}>Escopo</div>
-                    <select style={inp} value={form.escopo||"futuros"} onChange={e=>setForm(f=>({...f,escopo:e.target.value}))}>
-                      <option value="futuros">A partir do mês selecionado ({selMonth})</option>
-                      <option value="todos">Toda a série, exceto pagos/parciais</option>
-                    </select>
-                  </div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
-                    <div><div style={lbl}>Tipo</div><select style={inp} value={form.tipo||"despesa"} onChange={e=>setForm(f=>({...f,tipo:e.target.value}))}><option value="despesa">Despesa</option><option value="receita">Receita</option></select></div>
-                    <div><div style={lbl}>Dia do mês</div><input style={inputStyle("fixoDia")} type="number" min={1} max={31} value={form.fixoDia||""} onChange={e=>setForm(f=>({...f,fixoDia:e.target.value}))}/></div>
-                  </div>
-                  <div><div style={lbl}>Descrição</div><input style={inputStyle("descricao")} value={form.descricao||""} onChange={e=>setForm(f=>({...f,descricao:e.target.value}))}/></div>
-                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inputStyle("valor")} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></div>
-                  <div><div style={lbl}>Categoria</div><CategorySelect cats={cats} value={form.catId} onChange={v=>setForm(f=>({...f,catId:v}))} style={inp} validationInfo={requiredModal} fieldKey="catId"/></div>
-                  <div>
-                    <div style={lbl}>Origem</div>
-                    <select style={inp} value={form.origemTipo||"conta"} onChange={e=>setForm(f=>({...f,origemTipo:e.target.value, contaId:e.target.value==="cartao"?"":(f.contaId||contas[0]?.id||""), cartaoId:e.target.value==="cartao"?(f.cartaoId||cards[0]?.id||""):""}))}>
-                      <option value="conta">Conta / Vale</option>
-                      <option value="cartao">Cartão de crédito</option>
-                    </select>
-                  </div>
-                  {form.origemTipo==="cartao"?
-                    <div><div style={lbl}>Cartão</div><select style={inputStyle("cartaoId")} value={form.cartaoId||""} onChange={e=>setForm(f=>({...f,cartaoId:e.target.value}))}><option value="">Selecione</option>{cards.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
-                    :<div><div style={lbl}>Conta / Vale</div><select style={inputStyle("contaId")} value={form.contaId||""} onChange={e=>setForm(f=>({...f,contaId:e.target.value}))}><option value="">Selecione</option>{contas.map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}</select></div>
-                  }
-                </div>
-                <div style={{ display:"flex", gap:9, marginTop:16 }}>
-                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
-                  <button onClick={salvarEdicaoRecorrencia} style={btn(C.emerald,{ flex:1 })}>Salvar alterações</button>
-                </div>
-              </>
+              <EditRecorrenciaModal
+                form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} selMonth={selMonth} cats={cats} cards={cards} contas={contas} requiredModal={requiredModal}
+                closeModal={closeModal} salvarEdicaoRecorrencia={salvarEdicaoRecorrencia}
+              />
             )}
             {modal==="addCard"&&(
-              <>
-                <h3 style={{ margin:"0 0 16px", fontWeight:800 }}>Adicionar Cartão</h3>
-                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <div><div style={lbl}>Nome</div><input style={inputStyle("cardNome")} placeholder="Ex: Bradesco Visa" value={form.nome||""} onChange={e=>setForm(f=>({...f,nome:e.target.value}))}/></div>
-                  <div><div style={lbl}>Limite (R$)</div><MoneyInput style={inp} value={form.limite||""} onChange={value=>setForm(f=>({...f,limite:value}))}/></div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 }}>
-                    <div><div style={lbl}>Dia Fechamento</div><input style={inp} type="number" min={1} max={31} value={form.fechamento||""} onChange={e=>setForm(f=>({...f,fechamento:e.target.value}))}/></div>
-                    <div><div style={lbl}>Dia Vencimento</div><input style={inp} type="number" min={1} max={31} value={form.vencimento||""} onChange={e=>setForm(f=>({...f,vencimento:e.target.value}))}/></div>
-                  </div>
-                  <div><div style={lbl}>Conta corrente para pagamento da fatura</div><select style={inputStyle("cardContaPagamentoId")} value={form.contaPagamentoId||""} onChange={e=>setForm(f=>({...f,contaPagamentoId:e.target.value,accountId:e.target.value}))}><option value="">Selecione a conta</option>{contasCorrentes.map(ct=><option key={ct.id} value={ct.id}>{ct.nome}</option>)}</select></div>
-                  <div><div style={lbl}>Cor</div><div style={{ display:"flex", gap:7, flexWrap:"wrap", marginTop:4 }}>{["#7C3AED","#E8504A","#00A878","#F5B700","#0891B2","#DB2777","#6366F1","#F97316","#84CC16","#B0BEC5"].map(cor=><div key={cor} onClick={()=>setForm(f=>({...f,cor}))} style={{ width:24, height:24, borderRadius:5, background:cor, cursor:"pointer", border:form.cor===cor?"2px solid #fff":"2px solid transparent" }}/>)}</div></div>
-                </div>
-                <div style={{ display:"flex", gap:9, marginTop:16 }}>
-                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
-                  <button onClick={addCard} style={btn(C.emerald,{ flex:1 })}>Salvar</button>
-                </div>
-              </>
+              <AddCardModal form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} contasCorrentes={contasCorrentes} closeModal={closeModal} addCard={addCard} />
             )}
           </div>
         </div>
