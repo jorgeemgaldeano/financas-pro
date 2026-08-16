@@ -43,15 +43,10 @@ import { MetasTab } from "./components/organisms/MetasTab.jsx";
 import { ImportacaoTab } from "./components/organisms/ImportacaoTab.jsx";
 import { DashboardTab } from "./components/organisms/DashboardTab.jsx";
 import { ProjecoesTab } from "./components/organisms/ProjecoesTab.jsx";
-import { TransferModal } from "./components/organisms/modals/TransferModal.jsx";
-import { AddCofrinhoModal } from "./components/organisms/modals/AddCofrinhoModal.jsx";
-import { MovimentoCofrinhoModal } from "./components/organisms/modals/MovimentoCofrinhoModal.jsx";
-import { EditRecorrenciaModal } from "./components/organisms/modals/EditRecorrenciaModal.jsx";
-import { AddCardModal } from "./components/organisms/modals/AddCardModal.jsx";
-import { AddTransModal } from "./components/organisms/modals/AddTransModal.jsx";
 import { PessoasTab } from "./components/organisms/PessoasTab.jsx";
 import { INIT_CATS, INIT_PARAMS, INIT_CARDS, INIT_CONTAS, INIT_METAS, INIT_PESSOAS, INIT_DIVIDAS, INIT_DESPESAS_PESSOAS, INIT_TRANS } from "./constants/seedData.js";
 import { ParamsTab } from "./components/organisms/ParamsTab.jsx";
+import { ModalHost } from "./components/organisms/ModalHost.jsx";
 import { buildImportDuplicateKeyCandidates, buildExistingImportDuplicateKeys } from "./services/importDuplicateService.js";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
@@ -1898,38 +1893,15 @@ export default function App() {
 
       <ToastHost toasts={toasts} onDismiss={dismissToast} onUndo={(t)=>t.onUndo&&t.onUndo()} colors={C} />
 
-      {/* MODAL */}
-      {modal&&(
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.72)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100 }} onClick={e=>e.target===e.currentTarget&&closeModal()}>
-          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:26, width:420, maxWidth:"92vw" }}>
-            {modal==="addTrans"&&(
-              <AddTransModal
-                form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} cats={cats} requiredModal={requiredModal} cards={cards}
-                contasDisponiveis={contasDisponiveis} isCartao={isCartao} resolveCardCompetencia={resolveCardCompetencia} parcPreview={parcPreview} recPreview={recPreview}
-                selMon={selMon} selYear={selYear} closeModal={closeModal} addTransaction={addTransaction}
-              />
-            )}
-            {modal==="addTransfer"&&(
-              <TransferModal form={form} setForm={setForm} inp={inp} lbl={lbl} contasCorrentes={contasCorrentes} closeModal={closeModal} realizarTransferencia={realizarTransferencia} />
-            )}
-            {modal==="addCofrinho"&&(
-              <AddCofrinhoModal form={form} setForm={setForm} inp={inp} closeModal={closeModal} criarCofrinho={criarCofrinho} />
-            )}
-            {modal==="movimentoCofrinho"&&(
-              <MovimentoCofrinhoModal form={form} setForm={setForm} inp={inp} closeModal={closeModal} registrarMovimentoCofrinho={registrarMovimentoCofrinho} />
-            )}
-            {modal==="editRecorrencia"&&(
-              <EditRecorrenciaModal
-                form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} selMonth={selMonth} cats={cats} cards={cards} contas={contas} requiredModal={requiredModal}
-                closeModal={closeModal} salvarEdicaoRecorrencia={salvarEdicaoRecorrencia}
-              />
-            )}
-            {modal==="addCard"&&(
-              <AddCardModal form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} contasCorrentes={contasCorrentes} closeModal={closeModal} addCard={addCard} />
-            )}
-          </div>
-        </div>
-      )}
+      <ModalHost
+        modal={modal} closeModal={closeModal}
+        form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} requiredModal={requiredModal}
+        cats={cats} cards={cards} contas={contas} contasDisponiveis={contasDisponiveis} contasCorrentes={contasCorrentes}
+        isCartao={isCartao} resolveCardCompetencia={resolveCardCompetencia} parcPreview={parcPreview} recPreview={recPreview}
+        selMon={selMon} selYear={selYear} selMonth={selMonth}
+        addTransaction={addTransaction} realizarTransferencia={realizarTransferencia} criarCofrinho={criarCofrinho}
+        registrarMovimentoCofrinho={registrarMovimentoCofrinho} salvarEdicaoRecorrencia={salvarEdicaoRecorrencia} addCard={addCard}
+      />
     </div>
   );
 }
