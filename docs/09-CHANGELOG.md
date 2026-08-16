@@ -1245,6 +1245,132 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.35.0] - 2026-08-16
+
+Bloco "v0.3.35 — Performance e cálculo" de `docs/07-ROADMAP-E-BACKLOG.md`,
+completo. Escopo formalizado em `DEC-0036`: item E4 ("complexidade
+quadrática do cálculo de saldo") localizado pela primeira vez desde
+2026-07-05 e corrigido de fato (algoritmo, não cache), mais code-splitting
+de `pdfjs-dist`.
+
+### Adicionado
+
+- **`src/services/saldoService.js`** (novo, puro): extrai
+  `movimentoContaMes`/`getSaldoInicialConta` de `App.jsx` (antes inline,
+  linhas 2201-2221). `buildMovimentoIndex` agrupa `trans` por conta+mês numa
+  única passada O(N); `createSaldoInicialResolver` memoiza o saldo inicial
+  por conta+mês (cada par resolvido uma única vez por render, via caminhada
+  iterativa para trás até achar um ponto já resolvido, override manual ou o
+  piso de `baseSaldoMonth`/72 meses — sem recursão sem cache). Custo total
+  O(N + C×M), substituindo o O(C×M×N) anterior.
+- **`tests/saldoService.test.js`** (novo, 9 casos): testes de
+  caracterização escritos ANTES da extração — uma cópia fiel da recursão
+  original (`legacyGetSaldoInicialConta`) serve de oráculo, comparada contra
+  o resolver novo em cenários sem override, com override manual quebrando a
+  cadeia, com overrides em contas diferentes, e no piso de `baseSaldoMonth`.
+  Todos batem exatamente.
+
+### Alterado
+
+- `App.jsx`: `movimentoContaMes`/`getSaldoInicialConta` deixam de ser
+  `useCallback` recursivo e passam a vir de
+  `saldoResolver = useMemo(() => createSaldoInicialResolver(trans,
+  saldosIniciais, baseSaldoMonth), [...])` — mesma identidade estável entre
+  renders quando as dependências não mudam, mesmo comportamento observável.
+  `transMonthKey`/`valorRealizado` (antes definidos no módulo de `App.jsx`)
+  passam a ser importados de `saldoService.js` (mesma implementação, sem
+  mudança de assinatura — os ~24 usos existentes continuam funcionando sem
+  alteração).
+- **Code-splitting de `pdfjs-dist`** (`App.jsx`): import estático
+  (`import * as pdfjsLib from "pdfjs-dist"`) trocado por `import()` dinâmico
+  dentro de `extractPdfTextFromFile` (único ponto de uso, atrás de
+  `impMode==="vale"`), memoizado num closure (`loadPdfjs()`) para não
+  reimportar a cada chamada. Chunk principal caiu de 926,78 kB para
+  500,67 kB no build de produção.
+- **Absorve a auditoria de `useMemo`/`useCallback`** do item 3 do roadmap —
+  não tratada como item separado: aconteceu naturalmente ao extrair
+  `saldoResolver` (a memoização de saldo agora depende só de
+  `[trans, saldosIniciais, baseSaldoMonth]`, sem recomputar em re-renders
+  não relacionados).
+- Versão visual da aplicação atualizada para `v0.3.35.0`.
+
+### Migração
+
+- Nenhuma. Refatoração de cálculo interno — nenhuma chave de LocalStorage,
+  estrutura persistida ou regra de negócio (RN021 já previa cálculo
+  centralizado/testável) foi alterada.
+
+### Testes
+
+- `npm test` (Vitest): **149/149 passando** (antes: 140/140; +9 de
+  `saldoService.test.js`). `npm run build` aprovado — chunk principal caiu
+  para 500,67 kB (era 926,78 kB); o worker de `pdfjs-dist` (2,2 MB) agora só
+  carrega sob demanda em `extractPdfTextFromFile`, não mais no bundle
+  principal.
+- Validado no preview (`npm run dev`): Dashboard e saldo por conta
+  permaneceram **idênticos** aos valores antes da extração (Saldo Inicial
+  R$ 6.820,00, Saldo Final R$ 11.715,10, saldo de cada uma das 4 contas
+  igual); navegação entre meses (Ago→Mai/2026) sem erro de console.
+
+## [0.3.34.0] - 2026-08-16
+
+Bloco "v0.3.34 — Cofrinhos (objetivos de poupança)" de
+`docs/07-ROADMAP-E-BACKLOG.md`, completo. Modelo de dados e fórmula de
+simulação formalizados em `DEC-0035` e `RN032`.
+
+### Adicionado
+
+- **Nova chave de LocalStorage `cofrinhos`** (array), aditiva — entra em
+  `BACKUP_STORAGE_KEYS` (`storageKeys.js`) e em `normalizeBackupPayload()`
+  (`App.jsx`) com fallback `[]` para backups antigos (RN002). Não usa
+  `migrationPipeline.js` (específico do formato interno de `trans`). Sem
+  bump de `LS_VERSION`.
+- **`src/services/cofrinhoService.js`** (novo, puro/atômico): `saldoCofrinho`
+  (soma aportes − retiradas), `statusCofrinho`/`simularAporteMensal` (3
+  estados — em dia/concluído/atrasado, RN032, nunca divide por zero mesmo
+  com `dataAlvo` vencida), `createCofrinho`/`deleteCofrinho`/
+  `setArquivadoCofrinho`, `addMovimentoCofrinho` (bloqueia retirada que
+  deixaria saldo negativo) e `removeMovimentoCofrinho` — todas devolvendo o
+  snapshot completo de `cofrinhos` (mesmo padrão de `transferService.js`).
+  Helper novo `monthsBetween` em `dateUtils.js`. 24 casos em
+  `tests/cofrinhoService.test.js`.
+- **Aba "🐷 Cofrinhos"** nova: criar cofrinho (nome, valor-alvo, data-alvo),
+  cartão por cofrinho com barra de progresso, badge de status, aporte
+  sugerido/mês e projeção "no ritmo sugerido, atinge em MM/AAAA", botões de
+  aporte/retirada e histórico de movimentos com opção de remover cada um.
+- **Ledger isolado de `trans`** (decisão do usuário, `DEC-0035`): aportes e
+  retiradas não geram transação, não afetam saldo de conta nem entram como
+  transferência (RN031) — não expande o escopo desta versão para depender
+  do modelo de transferência da v0.3.33.
+
+### Alterado
+
+- Não altera nenhuma RN existente. Formaliza `RN032` (nova) —
+  `docs/02-REGRAS-DE-NEGOCIO.md`.
+- `handleExport`/`handleImport`/`handleReset` (`App.jsx`) passam a
+  incluir/restaurar/zerar `cofrinhos`, mesmo padrão já usado para
+  `simulacoes`.
+- Versão visual da aplicação **não** foi atualizada nesta entrada — o bump
+  de versão visual final desta sessão está registrado em `[0.3.35.0]`
+  acima (v0.3.34 e v0.3.35 implementadas em sequência, mesma sessão).
+
+### Migração
+
+- Nova chave `cofrinhos` (array), aditiva. Sem bump de `LS_VERSION`. Sem
+  alteração de estrutura existente.
+
+### Testes
+
+- `npm test` (Vitest): **140/140 passando** (antes: 116/116; +24 de
+  `cofrinhoService.test.js`). `npm run build` aprovado.
+- Validado no preview (`npm run dev`): criado cofrinho "Viagem" (alvo
+  R$ 1.200,00, data-alvo 6 meses à frente) — aporte sugerido calculado
+  corretamente (R$ 200,00/mês); aporte manual de R$ 300,00 registrado,
+  saldo/percentual/aporte sugerido recalculados corretamente (25%,
+  R$ 150,00/mês); Dashboard (Saldo Inicial, Entradas, Saldo Final)
+  permaneceu **idêntico** antes/depois do aporte, confirmando isolamento de
+  `trans`; exclusão do cofrinho de teste removida sem erro.
+
 ## [0.3.33.0] - 2026-08-16
 
 Bloco "v0.3.33 — Transferências entre contas" de

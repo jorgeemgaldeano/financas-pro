@@ -5,6 +5,8 @@ import { ConfirmDialog } from "./components/ui/ConfirmDialog.jsx";
 import { useToasts, ToastHost } from "./components/ui/Toast.jsx";
 import { moveCardTransactions, moveAccountTransactions, recategorizeCategory } from "./services/reassignmentService.js";
 import { createTransfer, deleteTransfer, isTransfer } from "./services/transferService.js";
+import { addMovimentoCofrinho, createCofrinho, deleteCofrinho, removeMovimentoCofrinho, saldoCofrinho, setArquivadoCofrinho, simularAporteMensal, statusCofrinho } from "./services/cofrinhoService.js";
+import { createSaldoInicialResolver, transMonthKey, valorRealizado } from "./services/saldoService.js";
 import { findTransferMatchCandidates, linkImportedRowAsTransfer, revertTransferLinksFromBatch } from "./services/transferMatchService.js";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
 import { guessCategoryForTransaction, normText } from "./services/categoryService.js";
@@ -22,12 +24,24 @@ import { CardInstallmentDivergencePanel } from "./components/finance/CardInstall
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
 import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditDiscardedOnImport, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
 import { getOrphanDividas } from "./utils/dividaUtils.js";
-import * as pdfjsLib from "pdfjs-dist";
-import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+// v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
+// (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
+// worker para o chunk principal, que é carregado em toda navegação.
+let pdfjsLibPromise = null;
+function loadPdfjs() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = Promise.all([
+      import("pdfjs-dist"),
+      import("pdfjs-dist/build/pdf.worker.mjs?url"),
+    ]).then(([pdfjsLib, pdfWorker]) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker.default;
+      return pdfjsLib;
+    });
+  }
+  return pdfjsLibPromise;
+}
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-
-const APP_VERSION = "0.3.33.0";
+const APP_VERSION = "0.3.35.0";
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {
@@ -111,6 +125,7 @@ function normalizeBackupPayload(payload) {
     saldosIniciais: asObject(read("saldosIniciais", ["initialBalances"], {}), {}),
     faturas: asArray(read("faturas", ["invoices"], [])),
     simulacoes: asArray(read("simulacoes", ["sims", "simulations"], [])),
+    cofrinhos: asArray(read("cofrinhos", [], [])),
     importReports: asArray(read("importReports", ["imports"], [])),
   };
 }
@@ -289,13 +304,8 @@ const uid = () => {
   return "id_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 11);
 };
 
-const transMonthKey = (t) => t.competencia || t.competenceMonth || mKey(t.data);
-
-const valorRealizado = (t) => {
-  if (t.status === "previsto") return 0;
-  if (t.status === "parcial") return Math.min(Number(t.valorPago) || 0, Number(t.valor) || 0);
-  return Number(t.valor) || 0;
-};
+// v0.3.35 — DEC-0036/E4: transMonthKey/valorRealizado extraídos para
+// saldoService.js (usados também por buildMovimentoIndex).
 
 const saldoPendente = (t) => Math.max(0, (Number(t.valor) || 0) - (Number(t.valorPago) || 0));
 
@@ -2132,6 +2142,7 @@ export default function App() {
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
   const [sims,     setSims]     = useLS("simulacoes", []);
+  const [cofrinhos, setCofrinhos] = useLS("cofrinhos", []);
   const { toasts, pushToast, dismissToast } = useToasts();
   const [simForm,  setSimForm]  = useState({ modoParc:"total", parcelas:"" });
   const [showContaForm, setShowContaForm] = useState(false);
@@ -2204,27 +2215,23 @@ export default function App() {
   const monthTrans = useMemo(()=>trans.filter(t=>transMonthKey(t)===selMonth),[trans,selMonth]);
 
   // ── Saldos mensais, previstos e realizados ────────────────────────────────
-  const movimentoContaMes = useCallback((ct, monthKey) => {
-    return trans
-      .filter(t => transMonthKey(t) === monthKey && t.contaId === ct.id && t.origem !== "cartao")
-      .reduce((sum, t) => {
-        const v = valorRealizado(t);
-        return sum + (t.tipo === "receita" ? v : -v);
-      }, 0);
-  }, [trans]);
-
+  // v0.3.35 — DEC-0036/E4: algoritmo O(C×M×N) (recursão sem cache,
+  // refiltrando `trans` a cada mês) trocado por O(N + C×M) via
+  // saldoService.createSaldoInicialResolver — índice de movimento por
+  // conta+mês construído uma vez (O(N)), saldo inicial memoizado por
+  // conta+mês (cada par só é calculado uma vez por render). Caracterização
+  // da recursão original em tests/saldoService.test.js.
   const baseSaldoMonth = useMemo(() => {
     const keys = trans.map(t => transMonthKey(t)).filter(Boolean).sort();
     return keys[0] || selMonth;
   }, [trans, selMonth]);
 
-  const getSaldoInicialConta = useCallback(function calc(ct, monthKey, depth = 0) {
-    const manual = saldosIniciais?.[monthKey]?.[ct.id];
-    if (manual !== undefined && manual !== null && manual !== "") return Number(manual) || 0;
-    if (monthCompare(monthKey, baseSaldoMonth) <= 0 || depth > 72) return Number(ct.saldoInicial) || 0;
-    const prevKey = monthOffset(monthKey, -1);
-    return calc(ct, prevKey, depth + 1) + movimentoContaMes(ct, prevKey);
-  }, [saldosIniciais, baseSaldoMonth, movimentoContaMes]);
+  const saldoResolver = useMemo(
+    () => createSaldoInicialResolver(trans, saldosIniciais, baseSaldoMonth),
+    [trans, saldosIniciais, baseSaldoMonth]
+  );
+  const movimentoContaMes = saldoResolver.movimentoContaMes;
+  const getSaldoInicialConta = saldoResolver.getSaldoInicialConta;
 
   const setSaldoInicialContaMes = useCallback((contaId, monthKey, value) => {
     setSaldosIniciais(prev => ({
@@ -2757,6 +2764,7 @@ export default function App() {
       faturas,
       simulacoes: sims,
       sims, // compatibilidade com backups anteriores da própria aplicação
+      cofrinhos,
       importReports,
     };
     const payload = {
@@ -2770,6 +2778,7 @@ export default function App() {
         cartoes: cards.length,
         pessoas: pessoas.length,
         simulacoes: sims.length,
+        cofrinhos: cofrinhos.length,
         lotesImportados: importBatchIds.length,
       },
       data,
@@ -2811,6 +2820,7 @@ export default function App() {
         setSaldosIniciais(data.saldosIniciais);
         setFaturas(data.faturas);
         setSims(data.simulacoes);
+        setCofrinhos(data.cofrinhos);
         setLastImportReport(data.importReports[0] || null);
         resetImport();
         alert("✅ Backup importado com sucesso! Os dados foram restaurados.");
@@ -2855,6 +2865,7 @@ export default function App() {
     setSaldosIniciais(emptyState.saldosIniciais);
     setFaturas(emptyState.faturas);
     setSims([]);
+    setCofrinhos([]);
     setModal(null);
     setForm({});
     setSelMonth(todayMonthKey());
@@ -2973,6 +2984,50 @@ export default function App() {
     return res;
   };
 
+  // ── Cofrinhos (v0.3.34 — DEC-0035/RN032) ──────────────────────────────────
+  const COFRINHO_REASON_MSG = {
+    missing_name: "Informe um nome para o cofrinho.",
+    invalid_amount: "Informe um valor maior que zero.",
+    missing_date: "Informe a data-alvo do cofrinho.",
+    invalid_type: "Tipo de movimento inválido.",
+    insufficient_balance: "Saldo insuficiente para essa retirada.",
+    not_found: "Cofrinho não encontrado.",
+  };
+
+  const criarCofrinho = () => {
+    const res = createCofrinho({ cofrinhos }, {
+      nome: form.nome, valorAlvo: moneyToNumber(form.valorAlvo), dataAlvo: form.dataAlvo, uid,
+    });
+    if (!res.ok) { alert(COFRINHO_REASON_MSG[res.reason] || "Não foi possível criar o cofrinho."); return; }
+    setCofrinhos(res.cofrinhos);
+    closeModal();
+  };
+
+  const excluirCofrinho = (id) => {
+    const before = cofrinhos;
+    const res = deleteCofrinho({ cofrinhos }, { id });
+    if (!res.ok) return;
+    setCofrinhos(res.cofrinhos);
+    pushToast({ message: "Cofrinho excluído.", onUndo: () => setCofrinhos(before) });
+  };
+
+  const registrarMovimentoCofrinho = () => {
+    const res = addMovimentoCofrinho({ cofrinhos }, {
+      cofrinhoId: form.cofrinhoId, valor: moneyToNumber(form.valor), data: form.data, tipo: form.tipoMovimento || "aporte", uid,
+    });
+    if (!res.ok) { alert(COFRINHO_REASON_MSG[res.reason] || "Não foi possível registrar o movimento."); return; }
+    setCofrinhos(res.cofrinhos);
+    closeModal();
+  };
+
+  const excluirMovimentoCofrinho = (cofrinhoId, movimentoId) => {
+    const before = cofrinhos;
+    const res = removeMovimentoCofrinho({ cofrinhos }, { cofrinhoId, movimentoId });
+    if (!res.ok) return;
+    setCofrinhos(res.cofrinhos);
+    pushToast({ message: "Movimento removido.", onUndo: () => setCofrinhos(before) });
+  };
+
   // Recategoriza por completo: move todos os lançamentos/despesas de `fromCatId`
   // (e descendentes) para `toCatId`. A categoria de origem permanece (o usuário
   // decide depois se a exclui).
@@ -3000,6 +3055,7 @@ export default function App() {
   });
 
   const extractPdfTextFromFile=async(file)=>{
+    const pdfjsLib=await loadPdfjs();
     const buffer=await file.arrayBuffer();
     const pdf=await pdfjsLib.getDocument({ data:buffer }).promise;
     const pages=[];
@@ -3527,6 +3583,7 @@ export default function App() {
     { id:"contas",      label:"🏦 Contas" },
     { id:"cartoes",     label:"💳 Cartões" },
     { id:"metas",       label:"🎯 Metas" },
+    { id:"cofrinhos",   label:"🐷 Cofrinhos" },
     { id:"pessoas",     label:"👥 Pessoas" },
     { id:"projecoes",   label:"Projeções" },
     { id:"simulacoes",  label:"🔬 Simulações" },
@@ -3535,7 +3592,7 @@ export default function App() {
   ];
 
   // Tab icon map
-  const TAB_ICONS = { dashboard:"◈", lancamentos:"≡", recorrencias:"🔁", contas:"🏦", cartoes:"💳", metas:"🎯", pessoas:"👥", projecoes:"↗", simulacoes:"🔬", importacao:"📥", parametros:"⚙️" };
+  const TAB_ICONS = { dashboard:"◈", lancamentos:"≡", recorrencias:"🔁", contas:"🏦", cartoes:"💳", metas:"🎯", cofrinhos:"🐷", pessoas:"👥", projecoes:"↗", simulacoes:"🔬", importacao:"📥", parametros:"⚙️" };
 
   return (
     <div style={{ minHeight:"100vh", background:C.navy, color:C.text, fontFamily:"'Inter',system-ui,sans-serif", display:"flex" }}>
@@ -4198,6 +4255,88 @@ export default function App() {
             </div>
           )}
 
+        {/* COFRINHOS — v0.3.34 (DEC-0035/RN032) */}
+        {tab==="cofrinhos"&&(
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div style={card()}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                <div>
+                  <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>🐷 Cofrinhos</div>
+                  <div style={{ fontSize:13, color:C.soft }}>
+                    Objetivos de poupança com ledger próprio de aportes/retiradas — não é a mesma coisa que Metas (limite de gasto por categoria) e não movimenta o saldo das suas contas.
+                  </div>
+                </div>
+                <button onClick={()=>{ setForm({ dataAlvo:addMonthsToDate(todayIso(),6) }); setModal("addCofrinho"); }} style={btn(C.emerald)}>+ Novo cofrinho</button>
+              </div>
+            </div>
+
+            {cofrinhos.length===0 ? (
+              <div style={card()}>
+                <div style={{ fontSize:13, color:C.soft, textAlign:"center", padding:"20px 0" }}>Nenhum cofrinho ainda. Crie o primeiro para simular o aporte mensal necessário até a data-alvo.</div>
+              </div>
+            ) : (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))", gap:14 }}>
+                {cofrinhos.map(cof=>{
+                  const sim = simularAporteMensal(cof, selMonth);
+                  const pct = cof.valorAlvo>0 ? Math.min(sim.saldoAtual/cof.valorAlvo,1) : 0;
+                  const statusInfo = {
+                    concluido:{ label:"✅ Concluído", color:C.emerald },
+                    atrasado:{ label:"⚠ Atrasado", color:C.coral },
+                    em_dia:{ label:"Em dia", color:C.gold },
+                  }[sim.status];
+                  return (
+                    <div key={cof.id} style={card()}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, marginBottom:8 }}>
+                        <div>
+                          <div style={{ fontWeight:700, fontSize:14 }}>{cof.nome}</div>
+                          <div style={{ fontSize:11, color:C.soft, marginTop:2 }}>Alvo: {fmtDate(cof.dataAlvo)}</div>
+                        </div>
+                        <span style={{ fontSize:10, background:statusInfo.color+"22", color:statusInfo.color, padding:"3px 8px", borderRadius:20, fontWeight:700, whiteSpace:"nowrap" }}>{statusInfo.label}</span>
+                      </div>
+
+                      <div style={{ display:"flex", alignItems:"baseline", gap:6, marginBottom:6 }}>
+                        <span style={{ fontSize:20, fontWeight:800, color:C.text }}>{fmtBRL(sim.saldoAtual)}</span>
+                        <span style={{ fontSize:12, color:C.soft }}>/ {fmtBRL(cof.valorAlvo)}</span>
+                      </div>
+                      <div style={{ background:C.border, borderRadius:4, height:8, overflow:"hidden", marginBottom:4 }}>
+                        <div style={{ height:8, borderRadius:4, width:`${Math.min(100,pct*100)}%`, background:statusInfo.color, transition:"width .3s" }}/>
+                      </div>
+                      <div style={{ fontSize:11, color:C.soft, marginBottom:10 }}>{(pct*100).toFixed(0)}% do alvo</div>
+
+                      {sim.status!=="concluido" && (
+                        <div style={{ background:C.navy, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12 }}>
+                          <div>Aporte sugerido/mês: <strong style={{ color:C.text }}>{fmtBRL(sim.aporteSugerido)}</strong></div>
+                          <div style={{ color:C.soft, marginTop:2 }}>No ritmo sugerido, atinge em {formatMonthBR(sim.projecaoMes)}.</div>
+                        </div>
+                      )}
+
+                      <div style={{ display:"flex", gap:8, marginBottom:cof.aportes.length?10:0 }}>
+                        <button onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"aporte", data:todayIso() }); setModal("movimentoCofrinho"); }} style={btn(C.emerald,{ flex:1, padding:"7px 10px", fontSize:12 })}>+ Aporte</button>
+                        <button onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"retirada", data:todayIso() }); setModal("movimentoCofrinho"); }} style={btn(C.coral,{ flex:1, padding:"7px 10px", fontSize:12 })} disabled={sim.saldoAtual<=0}>− Retirada</button>
+                        <button onClick={()=>{ if(window.confirm(`Excluir o cofrinho "${cof.nome}"? O histórico de aportes será perdido.`)) excluirCofrinho(cof.id); }} style={ghost({ padding:"7px 10px" })} title="Excluir cofrinho">🗑</button>
+                      </div>
+
+                      {cof.aportes.length>0 && (
+                        <div style={{ display:"flex", flexDirection:"column", gap:5, maxHeight:120, overflowY:"auto" }}>
+                          {[...cof.aportes].sort((a,b)=>b.data.localeCompare(a.data)).map(mv=>(
+                            <div key={mv.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11, color:C.soft }}>
+                              <span>{fmtDate(mv.data)} — {mv.tipo==="retirada"?"Retirada":"Aporte"}</span>
+                              <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                <strong style={{ color:mv.tipo==="retirada"?C.coral:C.emerald }}>{mv.tipo==="retirada"?"−":"+"}{fmtBRL(mv.valor)}</strong>
+                                <button onClick={()=>excluirMovimentoCofrinho(cof.id, mv.id)} style={{ background:"transparent", border:"none", color:C.muted, cursor:"pointer", fontSize:12 }}>×</button>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* PESSOAS */}
         {tab==="pessoas"&&<PessoasTab
             pessoas={pessoas} setPessoas={setPessoas}
@@ -4814,6 +4953,34 @@ export default function App() {
                 <div style={{ display:"flex", gap:9, marginTop:16 }}>
                   <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
                   <button onClick={realizarTransferencia} style={btn("#0891B2",{ flex:1 })}>Transferir</button>
+                </div>
+              </>
+            )}
+            {modal==="addCofrinho"&&(
+              <>
+                <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>Novo cofrinho</h3>
+                <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>Ledger próprio de aportes/retiradas, independente das suas contas (RN032).</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div><div style={lbl}>Nome</div><input style={inp} placeholder="Ex: Viagem, Reserva de emergência" value={form.nome||""} onChange={e=>setForm(f=>({...f,nome:e.target.value}))}/></div>
+                  <div><div style={lbl}>Valor-alvo (R$)</div><MoneyInput style={inp} value={form.valorAlvo||""} onChange={value=>setForm(f=>({...f,valorAlvo:value}))}/></div>
+                  <div><div style={lbl}>Data-alvo</div><DateInput style={inp} value={form.dataAlvo||""} onChange={value=>setForm(f=>({...f,dataAlvo:value}))}/></div>
+                </div>
+                <div style={{ display:"flex", gap:9, marginTop:16 }}>
+                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
+                  <button onClick={criarCofrinho} style={btn(C.emerald,{ flex:1 })}>Criar cofrinho</button>
+                </div>
+              </>
+            )}
+            {modal==="movimentoCofrinho"&&(
+              <>
+                <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>{form.tipoMovimento==="retirada"?"Retirada do cofrinho":"Aporte no cofrinho"}</h3>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></div>
+                  <div><div style={lbl}>Data</div><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
+                </div>
+                <div style={{ display:"flex", gap:9, marginTop:16 }}>
+                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
+                  <button onClick={registrarMovimentoCofrinho} style={btn(form.tipoMovimento==="retirada"?C.coral:C.emerald,{ flex:1 })}>{form.tipoMovimento==="retirada"?"Confirmar retirada":"Confirmar aporte"}</button>
                 </div>
               </>
             )}

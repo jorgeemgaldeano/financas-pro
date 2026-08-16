@@ -26,6 +26,15 @@ export const addMonthsToDate = (dateKey, amount) => {
 
 export const monthOffset = (monthKey, amount) => addMonthsToMonthKey(monthKey, amount);
 
+// v0.3.34 — DEC-0035/RN032: nº de meses de `from` até `to` (positivo se `to`
+// é posterior). Usado na simulação de aporte mensal de Cofrinhos.
+export const monthsBetween = (from, to) => {
+  const [fy, fm] = String(from || "").split("-").map(Number);
+  const [ty, tm] = String(to || "").split("-").map(Number);
+  if (!fy || !fm || !ty || !tm) return 0;
+  return (ty - fy) * 12 + (tm - fm);
+};
+
 export const monthCompare = (a, b) => a.localeCompare(b);
 
 export const dateForMonthDay = (monthKey, day) => {

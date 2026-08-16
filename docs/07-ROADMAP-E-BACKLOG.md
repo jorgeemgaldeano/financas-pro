@@ -1005,13 +1005,13 @@ partir do mês atual.
 
 **Modelo de dados (NOVA entidade persistida → território `guardiao-localstorage`):**
 
-- [ ] Nova chave de LocalStorage `cofrinhos` (array). Estrutura por item
+- [x] Nova chave de LocalStorage `cofrinhos` (array). Estrutura por item
   (RN032): `{ id, nome, valorAlvo, dataAlvo, aportes:[{ id, data, valor,
   tipo:"aporte"|"retirada" }], arquivado? }`. Saldo = soma dos
   aportes − retiradas (**ledger próprio, aportes manuais, isolado de
   `trans`** — decisão do usuário; sem acoplamento a contas, sem risco de
   dupla contagem).
-- [ ] Entrar em `BACKUP_STORAGE_KEYS` (`storageKeys.js`) e em
+- [x] Entrar em `BACKUP_STORAGE_KEYS` (`storageKeys.js`) e em
   `normalizeBackupPayload()` (`App.jsx`) com default seguro `[]` para
   backups antigos (RN002). Não usa `migrationPipeline.js` — esse pipeline é
   específico do formato interno de `trans`, não se aplica a uma chave nova
@@ -1019,13 +1019,13 @@ partir do mês atual.
 
 **Escopo funcional:**
 
-- [ ] CRUD de cofrinho (nome, valor-alvo, data-alvo).
-- [ ] Registrar aporte/retirada, com saldo acumulado e % do alvo.
-- [ ] **Simulação do aporte mensal**: `(valorAlvo − saldoAtual) / meses entre
+- [x] CRUD de cofrinho (nome, valor-alvo, data-alvo).
+- [x] Registrar aporte/retirada, com saldo acumulado e % do alvo.
+- [x] **Simulação do aporte mensal**: `(valorAlvo − saldoAtual) / meses entre
   o mês atual e a dataAlvo`. Exibir também projeção "no ritmo atual, atinge
   em MM/AAAA". Reaproveitar utilitários de mês (`dateUtils`) e monetários.
-- [ ] Estado visual: em dia / atrasado / concluído.
-- [ ] Testes unitários do cálculo de simulação e do saldo do ledger.
+- [x] Estado visual: em dia / atrasado / concluído.
+- [x] Testes unitários do cálculo de simulação e do saldo do ledger.
 
 **Riscos:** baixo em cálculo (ledger isolado), médio em persistência (chave
 nova) — a migração/backup é o ponto de atenção. Não altera nenhuma RN
@@ -1036,7 +1036,7 @@ existente; adiciona entidade nova.
 Item E4 localizado e escopo real formalizado em `DEC-0036` (2026-08-16),
 depois de ficar como rótulo sem causa identificada desde 2026-07-05.
 
-- [ ] **E4 — complexidade quadrática do cálculo de saldo, fix completo**
+- [x] **E4 — complexidade quadrática do cálculo de saldo, fix completo**
   (não só cache): extrair `movimentoContaMes`/`getSaldoInicialConta`
   (`App.jsx:2201-2221`) para `src/services/saldoService.js` novo, com
   testes de caracterização do valor atual ANTES de mudar o algoritmo;
@@ -1045,9 +1045,9 @@ depois de ficar como rótulo sem causa identificada desde 2026-07-05.
   depois somar prefixado por conta). `useMemo`/`useCallback` sozinho NÃO
   resolve — só evita recálculo em re-renders não relacionados, o custo
   algorítmico volta a cada troca de mês/edição de lançamento.
-- [ ] **Absorve o item de auditoria de `useMemo`/`useCallback`** (não é mais
+- [x] **Absorve o item de auditoria de `useMemo`/`useCallback`** (não é mais
   item separado — acontece naturalmente ao reestruturar o cálculo acima).
-- [ ] Reduzir o alerta de build de chunk > 500 kB via code splitting —
+- [x] Reduzir o alerta de build de chunk > 500 kB via code splitting —
   candidato validado: `pdfjs-dist` (`App.jsx:25-26`, uso isolado em
   `extractPdfTextFromFile` atrás de `impMode==="vale"`) trocar os imports
   estáticos do topo por `import()` dinâmico dentro dessa função. Item

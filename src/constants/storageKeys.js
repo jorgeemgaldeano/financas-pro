@@ -15,4 +15,5 @@ export const BACKUP_STORAGE_KEYS = [
   "saldosIniciais",
   "faturas",
   "simulacoes",
+  "cofrinhos",
 ];
