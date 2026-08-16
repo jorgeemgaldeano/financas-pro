@@ -52,6 +52,7 @@ import { AddTransModal } from "./components/organisms/modals/AddTransModal.jsx";
 import { PessoasTab } from "./components/organisms/PessoasTab.jsx";
 import { INIT_CATS, INIT_PARAMS, INIT_CARDS, INIT_CONTAS, INIT_METAS, INIT_PESSOAS, INIT_DIVIDAS, INIT_DESPESAS_PESSOAS, INIT_TRANS } from "./constants/seedData.js";
 import { ParamsTab } from "./components/organisms/ParamsTab.jsx";
+import { buildImportDuplicateKeyCandidates, buildExistingImportDuplicateKeys } from "./services/importDuplicateService.js";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
 // worker para o chunk principal, que é carregado em toda navegação.
@@ -193,117 +194,10 @@ const saldoPendente = (t) => Math.max(0, (Number(t.valor) || 0) - (Number(t.valo
 
 const valorExibicaoLancamento = (t) => roundMoney(Number(t?.valor) || Number(t?.amount) || valorRealizado(t));
 
-const normalizeImportDescriptionForDuplicate = (value) => normText(String(value || "").replace(/\s+/g, " ").trim());
-
-const normalizeImportAmountForDuplicate = (record) => roundMoney(Number(record?.valor ?? record?.amount ?? 0));
-
-const normalizeImportTypeForDuplicate = (record, mode) => record?.tipo || (mode === "cartao" ? "despesa" : "");
-
-function uniqueNonEmpty(values) {
-  return Array.from(new Set(values.map(value => String(value || "").trim()).filter(Boolean)));
-}
-
-function getImportDuplicateDateCandidates(record) {
-  return uniqueNonEmpty([
-    record?.dataCompra,
-    record?.data,
-    record?.date,
-    record?.dt,
-  ].map(value => String(value || "").slice(0, 10)));
-}
-
-function stripInstallmentMarkersFromDescription(value) {
-  return String(value || "")
-    .replace(/\bparc(?:ela)?\s*\d+\s*(?:de|\/)\s*\d+\b/gi, " ")
-    .replace(/\bparc\.\s*\d+\s*(?:de|\/)\s*\d+\b/gi, " ")
-    .replace(/\b\d{1,2}\s*\/\s*\d{1,2}\b/g, " ")
-    .replace(/\b\d{1,2}\s+de\s+\d{1,2}\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function getInstallmentInfoFromDescription(value) {
-  const text = String(value || "").toLowerCase();
-  const patterns = [
-    /\bparc(?:ela)?\s*(\d{1,2})\s*(?:de|\/)\s*(\d{1,2})\b/i,
-    /\bparc\.\s*(\d{1,2})\s*(?:de|\/)\s*(\d{1,2})\b/i,
-    /\b(\d{1,2})\s*\/\s*(\d{1,2})\b/,
-    /\b(\d{1,2})\s+de\s+(\d{1,2})\b/i,
-  ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (!match) continue;
-    const parcela = parseInt(match[1], 10);
-    const totalParcelas = parseInt(match[2], 10);
-    if (Number.isFinite(parcela) && Number.isFinite(totalParcelas) && parcela >= 1 && totalParcelas >= parcela && totalParcelas > 1) {
-      return { parcela, totalParcelas };
-    }
-  }
-  return { parcela:null, totalParcelas:null };
-}
-
-function getImportInstallmentInfo(record) {
-  const parsed = getInstallmentInfoFromDescription(record?.descricao || record?.description || "");
-  const parcela = parseInt(record?.parcela ?? parsed.parcela, 10);
-  const totalParcelas = parseInt(record?.totalParcelas ?? record?.parcelas ?? parsed.totalParcelas, 10);
-  if (Number.isFinite(parcela) && Number.isFinite(totalParcelas) && parcela >= 1 && totalParcelas >= parcela && totalParcelas > 1) {
-    return { parcela, totalParcelas };
-  }
-  return { parcela:null, totalParcelas:null };
-}
-
-function getImportDuplicateDescriptionCandidates(record) {
-  const base = String(record?.descricao || record?.description || "");
-  const normalized = normalizeImportDescriptionForDuplicate(base);
-  const semParcela = normalizeImportDescriptionForDuplicate(stripInstallmentMarkersFromDescription(base));
-  return uniqueNonEmpty([normalized, semParcela]);
-}
-
-function buildStrictImportDuplicateKeyCandidates(record, { mode, destinationId }) {
-  const scope = mode === "cartao" ? `cartao:${destinationId || ""}` : `conta:${destinationId || ""}:${mode || ""}`;
-  const dates = getImportDuplicateDateCandidates(record);
-  const descriptions = getImportDuplicateDescriptionCandidates(record);
-  const valor = normalizeImportAmountForDuplicate(record).toFixed(2);
-  const tipo = normalizeImportTypeForDuplicate(record, mode);
-  const keys = [];
-  dates.forEach(data => {
-    descriptions.forEach(descricao => {
-      keys.push(`${scope}|${data}|${descricao}|${valor}|${tipo}`);
-    });
-  });
-  return uniqueNonEmpty(keys);
-}
-
-function buildCardInstallmentDuplicateKeyCandidates(record, { cartaoId }) {
-  const { parcela, totalParcelas } = getImportInstallmentInfo(record);
-  if (!cartaoId || !parcela || !totalParcelas) return [];
-  const valor = normalizeImportAmountForDuplicate(record).toFixed(2);
-  const descriptions = getImportDuplicateDescriptionCandidates(record);
-  return uniqueNonEmpty(descriptions.map(descricao => `cartao:${cartaoId}|parcelamento|${descricao}|${valor}|${parcela}/${totalParcelas}`));
-}
-
-function buildImportDuplicateKeyCandidates(record, { mode, destinationId }) {
-  const keys = buildStrictImportDuplicateKeyCandidates(record, { mode, destinationId });
-  if (mode === "cartao") keys.push(...buildCardInstallmentDuplicateKeyCandidates(record, { cartaoId:destinationId }));
-  return uniqueNonEmpty(keys);
-}
-
-function buildStrictImportDuplicateKey(record, { mode, destinationId }) {
-  return buildStrictImportDuplicateKeyCandidates(record, { mode, destinationId })[0] || "";
-}
-
-function buildExistingImportDuplicateKeys(transactions, { mode, contaId, cartaoId }) {
-  const destinationId = mode === "cartao" ? cartaoId : contaId;
-  const keys = [];
-  (transactions || [])
-    .filter(item => mode === "cartao"
-      ? item?.cartaoId === cartaoId
-      : item?.contaId === contaId && item?.origem !== "cartao")
-    .forEach(item => {
-      keys.push(...buildImportDuplicateKeyCandidates(item, { mode, destinationId }));
-    });
-  return new Set(keys);
-}
+// v0.3.37 — Fase 5 (DEC-0038): as chaves de deduplicação da importação
+// (normalização de descrição/valor/tipo, leitura de parcela e montagem
+// das chaves candidatas) foram extraídas para
+// services/importDuplicateService.js.
 
 
 // v0.3.37 — Fase 2 (DEC-0038): MoneyInput extraído para
