@@ -47,6 +47,7 @@ import { PessoasTab } from "./components/organisms/PessoasTab.jsx";
 import { INIT_CATS, INIT_PARAMS, INIT_CARDS, INIT_CONTAS, INIT_METAS, INIT_PESSOAS, INIT_DIVIDAS, INIT_DESPESAS_PESSOAS, INIT_TRANS } from "./constants/seedData.js";
 import { ParamsTab } from "./components/organisms/ParamsTab.jsx";
 import { ModalHost } from "./components/organisms/ModalHost.jsx";
+import { AppShell } from "./components/templates/AppShell.jsx";
 import { buildImportDuplicateKeyCandidates, buildExistingImportDuplicateKeys } from "./services/importDuplicateService.js";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
@@ -1681,98 +1682,29 @@ export default function App() {
     });
   }, [trans, selMonth]);
 
-  const TABS=[
-    { id:"dashboard",   label:"Dashboard" },
-    { id:"lancamentos", label:"Lançamentos" },
-    { id:"recorrencias",label:"🔁 Recorrências" },
-    { id:"contas",      label:"🏦 Contas" },
-    { id:"cartoes",     label:"💳 Cartões" },
-    { id:"metas",       label:"🎯 Metas" },
-    { id:"cofrinhos",   label:"🐷 Cofrinhos" },
-    { id:"pessoas",     label:"👥 Pessoas" },
-    { id:"projecoes",   label:"Projeções" },
-    { id:"simulacoes",  label:"🔬 Simulações" },
-    { id:"importacao",  label:"📥 Importar" },
-    { id:"parametros",  label:"⚙️ Parâmetros" },
-  ];
-
-  // Tab icon map
-  const TAB_ICONS = { dashboard:"◈", lancamentos:"≡", recorrencias:"🔁", contas:"🏦", cartoes:"💳", metas:"🎯", cofrinhos:"🐷", pessoas:"👥", projecoes:"↗", simulacoes:"🔬", importacao:"📥", parametros:"⚙️" };
-
   return (
-    <div style={{ minHeight:"100vh", background:C.navy, color:C.text, fontFamily:"'Inter',system-ui,sans-serif", display:"flex" }}>
+    <AppShell
+      appVersion={APP_VERSION}
+      persistError={persistError} setPersistError={setPersistError}
+      tab={tab} setTab={setTab}
+      selMon={selMon} selYear={selYear} prevMonth={prevMonth} nextMonth={nextMonth}
+      openAddTrans={openAddTrans} btn={btn}
+      overlays={<>
+        <RequiredFieldModal info={requiredModal} onClose={()=>setRequiredModal(null)} />
 
-      {/* ── v0.3.26.7 · L6: aviso de falha de persistência ── */}
-      {persistError&&<div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:C.coral, color:"#fff", padding:"10px 16px", display:"flex", alignItems:"center", justifyContent:"center", gap:12, fontSize:13, fontWeight:600, boxShadow:"0 2px 8px rgba(0,0,0,0.3)" }}><span>⚠️ Falha ao salvar no navegador (armazenamento cheio ou bloqueado). Suas últimas alterações podem não ter sido gravadas. Faça um backup em Parâmetros e libere espaço.</span><button onClick={()=>setPersistError(false)} style={{ background:"rgba(255,255,255,0.25)", border:"none", borderRadius:6, color:"#fff", padding:"4px 10px", cursor:"pointer", fontWeight:700 }}>Entendi</button></div>}
+        <ToastHost toasts={toasts} onDismiss={dismissToast} onUndo={(t)=>t.onUndo&&t.onUndo()} colors={C} />
 
-      {/* ── Sidebar ── */}
-      <div style={{ width:200, flexShrink:0, background:C.surface, borderRight:`1px solid ${C.border}`, display:"flex", flexDirection:"column", minHeight:"100vh", position:"sticky", top:0, height:"100vh", overflowY:"auto" }}>
-
-        {/* Logo */}
-        <div style={{ padding:"18px 16px 14px", borderBottom:`1px solid ${C.border}` }}>
-          <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-            <div style={{ width:30, height:30, borderRadius:8, background:`linear-gradient(135deg,${C.emerald},#007a57)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, flexShrink:0 }}>₪</div>
-            <div>
-              <div style={{ fontWeight:800, fontSize:14, letterSpacing:"-0.02em", lineHeight:1.1 }}>FinançasPRO</div>
-              <div style={{ display:"flex", alignItems:"center", gap:5, marginTop:2, flexWrap:"wrap" }}>
-                <span style={{ fontSize:9, color:C.emerald }}>● salvo</span>
-                <span title="Versão do aplicativo" style={{ fontSize:9, color:C.gold, background:C.gold+"22", border:`1px solid ${C.gold}44`, borderRadius:999, padding:"1px 6px", fontWeight:800 }}>v{APP_VERSION}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Navegação */}
-        <nav style={{ flex:1, padding:"10px 8px", display:"flex", flexDirection:"column", gap:2 }}>
-          {TABS.map(t=>{
-            const NAV_LABELS = { dashboard:"Dashboard", lancamentos:"Lançamentos", recorrencias:"Recorrências", contas:"Contas", cartoes:"Cartões", metas:"Metas", pessoas:"Pessoas", projecoes:"Projeções", simulacoes:"Simulações", importacao:"Importar", parametros:"Parâmetros" };
-            return (
-            <button key={t.id} onClick={()=>setTab(t.id)} style={{
-              display:"flex", alignItems:"center", gap:9,
-              background: tab===t.id ? C.emerald+"18" : "transparent",
-              border: "none",
-              borderLeft: `3px solid ${tab===t.id ? C.emerald : "transparent"}`,
-              borderRadius: "0 8px 8px 0",
-              color: tab===t.id ? C.emerald : C.soft,
-              padding:"9px 12px 9px 13px",
-              cursor:"pointer", fontWeight: tab===t.id ? 700 : 500,
-              fontSize:13, textAlign:"left", width:"100%",
-              transition:"all .15s",
-            }}>
-              <span style={{ fontSize:14, width:18, textAlign:"center", flexShrink:0 }}>{TAB_ICONS[t.id]}</span>
-              <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{NAV_LABELS[t.id]||t.label}</span>
-            </button>
-            );
-          })}
-        </nav>
-
-        {/* Botão + Lançamento no rodapé da sidebar */}
-        <div style={{ padding:"12px 10px", borderTop:`1px solid ${C.border}` }}>
-          <button onClick={openAddTrans} style={{ ...btn(C.emerald), width:"100%", fontSize:13, padding:"9px 0", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-            <span style={{ fontSize:16 }}>+</span> Lançamento
-          </button>
-        </div>
-      </div>
-
-      {/* ── Conteúdo principal ── */}
-      <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column" }}>
-
-        {/* Topbar: mês + título */}
-        <div style={{ background:C.surface, borderBottom:`1px solid ${C.border}`, padding:"0 24px", height:56, display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
-          <div style={{ fontWeight:700, fontSize:15, color:C.text }}>
-            {TABS.find(t=>t.id===tab)?.label}
-          </div>
-          {tab!=="parametros"&&(
-            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <button onClick={prevMonth} style={btn(C.border,{ padding:"4px 10px", fontSize:14 })}>‹</button>
-              <span style={{ fontWeight:700, fontSize:14, minWidth:120, textAlign:"center" }}>{MONTHS[selMon-1]} {selYear}</span>
-              <button onClick={nextMonth} style={btn(C.border,{ padding:"4px 10px", fontSize:14 })}>›</button>
-            </div>
-          )}
-        </div>
-
-        {/* Área de conteúdo das abas */}
-        <div style={{ flex:1, padding:"22px 24px", overflowY:"auto" }}>
+        <ModalHost
+          modal={modal} closeModal={closeModal}
+          form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} requiredModal={requiredModal}
+          cats={cats} cards={cards} contas={contas} contasDisponiveis={contasDisponiveis} contasCorrentes={contasCorrentes}
+          isCartao={isCartao} resolveCardCompetencia={resolveCardCompetencia} parcPreview={parcPreview} recPreview={recPreview}
+          selMon={selMon} selYear={selYear} selMonth={selMonth}
+          addTransaction={addTransaction} realizarTransferencia={realizarTransferencia} criarCofrinho={criarCofrinho}
+          registrarMovimentoCofrinho={registrarMovimentoCofrinho} salvarEdicaoRecorrencia={salvarEdicaoRecorrencia} addCard={addCard}
+        />
+      </>}
+    >
 
         {/* DASHBOARD */}
         {tab==="dashboard"&&(
@@ -1886,22 +1818,6 @@ export default function App() {
         {/* PARÂMETROS */}
         {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} reassignAndDeleteCard={reassignAndDeleteCard} reassignAndDeleteAccount={reassignAndDeleteAccount} recategorizeWholeCat={recategorizeWholeCat} reassignReasonMsg={REASSIGN_REASON_MSG} onExport={handleExport} onImport={handleImport} onReset={handleReset}/>}
 
-        </div>
-      </div>
-
-      <RequiredFieldModal info={requiredModal} onClose={()=>setRequiredModal(null)} />
-
-      <ToastHost toasts={toasts} onDismiss={dismissToast} onUndo={(t)=>t.onUndo&&t.onUndo()} colors={C} />
-
-      <ModalHost
-        modal={modal} closeModal={closeModal}
-        form={form} setForm={setForm} inp={inp} lbl={lbl} inputStyle={inputStyle} requiredModal={requiredModal}
-        cats={cats} cards={cards} contas={contas} contasDisponiveis={contasDisponiveis} contasCorrentes={contasCorrentes}
-        isCartao={isCartao} resolveCardCompetencia={resolveCardCompetencia} parcPreview={parcPreview} recPreview={recPreview}
-        selMon={selMon} selYear={selYear} selMonth={selMonth}
-        addTransaction={addTransaction} realizarTransferencia={realizarTransferencia} criarCofrinho={criarCofrinho}
-        registrarMovimentoCofrinho={registrarMovimentoCofrinho} salvarEdicaoRecorrencia={salvarEdicaoRecorrencia} addCard={addCard}
-      />
-    </div>
+    </AppShell>
   );
 }
