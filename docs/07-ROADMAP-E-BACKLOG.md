@@ -1067,7 +1067,16 @@ depois de ficar como rótulo sem causa identificada desde 2026-07-05.
   então implementar a chamada real em `aiCategorizationService.js`
   (hoje só scaffold, ver `DEC-0031`). Não iniciar sem essa decisão.
 
-### v0.3.37 — Modularização estrutural
+### v0.3.37 — Modularização estrutural (serviços + Atomic Design do front-end)
+
+Escopo ampliado em 2026-08-16 (`DEC-0038`), por decisão do usuário: a
+extração de serviços já planejada (itens 1-4 abaixo) e uma reorganização
+completa da camada de apresentação em Atomic Design (itens 5-9) passam a
+viver na mesma versão, em vez de uma v0.3.39 separada. Ver `DEC-0038` para
+o diagnóstico completo (mapa factual do estado atual de `App.jsx`) e o
+raciocínio do sequenciamento por fase.
+
+**Extração de serviços (escopo original, 2026-07-08):**
 
 - [ ] Extrair `simulationService.js` (cálculo de simulações hoje dentro
   de `App.jsx`).
@@ -1078,6 +1087,41 @@ depois de ficar como rótulo sem causa identificada desde 2026-07-05.
   manualmente mais uma vez (critério já registrado em `DEC-0008`).
 - [ ] Retomar a revisão conceitual da aba Projeções (fluxo de caixa real
   vs. estimativa) mapeada na sessão de 2026-06-29, ainda não concluída.
+
+**Atomic Design do front-end (escopo novo, `DEC-0038`) — 5 fases, cada
+uma testável/validável isoladamente antes de seguir para a próxima:**
+
+- [ ] **Fase 1 — Tokens.** Criar `src/theme/tokens.js` com a paleta `C`
+  hoje presa dentro de `App.jsx`. Componentes já extraídos
+  (`ConfirmDialog`, `RequiredFieldModal`, `Toast`, `CashFlowChart`) trocam
+  seu `DEFAULT_COLORS`/`colors` próprio por import de `tokens.js` — fecha
+  o risco de drift de cor entre telas. Risco: quase zero (sem mudança
+  visual).
+- [ ] **Fase 2 — Atoms.** `Button`, `Card`, `Label`, `StatValue`,
+  `ProgressBar`, `Badge`, `IconButton` (o padrão "×" de excluir, hoje
+  repetido 15×), `MoneyInput` (hoje função local em `App.jsx:419`, nunca
+  extraída). Wrappers finos em cima do estilo já existente, sem mudar
+  visual — validar por preview antes/depois. Risco: baixo.
+- [ ] **Fase 3 — Molecules.** `FormField` (Label+Input, hoje pareados à
+  mão em 46+ lugares), `StatTile` (Label+StatValue+legenda),
+  `ProgressCard` (unifica o padrão de barra+badge+status hoje duplicado
+  quase igual entre Metas e Cofrinhos), `ModalShell` (título+corpo+rodapé
+  Cancelar/Confirmar, reaproveitado pelos 6 modais). Risco: médio (mais
+  callsites tocados, mas ainda presentational).
+- [ ] **Fase 4 — Organisms.** Uma aba = um componente, mesmo padrão já
+  provado em `PessoasTab`/`ParamsTab`. Ordem das menores pras maiores:
+  Simulações (~33 linhas) → Cofrinhos (~82) → Lançamentos (~64) → Cartões
+  (~60) → Recorrências (~78) → Contas (~119) → Metas (~98) → Importação
+  (~153) → Dashboard (~167) → Projeções (~199, maior e mais dependente de
+  filtros — deixar por último). Modais: os 5 pequenos
+  (`addTransfer`/`addCofrinho`/`movimentoCofrinho`/`editRecorrencia`/
+  `addCard`) antes do `addTrans` (~189 linhas, formulário mais usado do
+  app — maior risco).
+- [ ] **Fase 5 — Template/Page.** Só depois que os organisms já saíram:
+  extrair `AppShell` (sidebar+topbar+slot de conteúdo, hoje misturado no
+  `return` de `App()`). `App.jsx` fica reduzido a orquestração de
+  estado/hooks + composição — alvo realista: sair de ~5.000 linhas para a
+  faixa de 600-800.
 
 ### v0.3.38 — Sincronização multi-dispositivo (casal em notebooks separados)
 

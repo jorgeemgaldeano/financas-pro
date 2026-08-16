@@ -14,7 +14,7 @@ import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnore
 import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
-import { fmtBRL, maskMoneyInput, moneyToNumber } from "./utils/moneyUtils.js";
+import { fmtBRL, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset, todayIso, todayMonthKey } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
 import { closeInvoice, reopenInvoice, addInvoiceAdjustment, computeCardInvoice, resolveInvoiceCategoryId } from "./services/cardInvoiceOperations.js";
@@ -24,6 +24,14 @@ import { CardInstallmentDivergencePanel } from "./components/finance/CardInstall
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
 import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditDiscardedOnImport, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
 import { getOrphanDividas } from "./utils/dividaUtils.js";
+import { C } from "./theme/tokens.js";
+import { MoneyInput } from "./components/atoms/MoneyInput.jsx";
+import { Card } from "./components/atoms/Card.jsx";
+import { Button, GhostButton } from "./components/atoms/Button.jsx";
+import { IconButton } from "./components/atoms/IconButton.jsx";
+import { FormField } from "./components/molecules/FormField.jsx";
+import { ProgressStat } from "./components/molecules/ProgressStat.jsx";
+import { ModalFooter } from "./components/molecules/ModalFooter.jsx";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
 // worker para o chunk principal, que é carregado em toda navegação.
@@ -130,11 +138,9 @@ function normalizeBackupPayload(payload) {
   };
 }
 
-const C = {
-  navy:"#0F1E36", surface:"#162640", border:"#1E3050",
-  emerald:"#00A878", coral:"#E8504A", gold:"#F5B700",
-  muted:"#4A6380", text:"#E8EDF4", soft:"#8FA8C0",
-};
+// v0.3.37 — Fase 1 (DEC-0038): paleta extraída para theme/tokens.js,
+// fonte única de cores (antes duplicada em DEFAULT_COLORS de cada
+// componente extraído).
 
 const INIT_CATS = [
   { id:"cat1", nome:"Alimentação",  cor:"#00A878", icon:"🍽️", subs:[
@@ -424,19 +430,8 @@ function buildExistingImportDuplicateKeys(transactions, { mode, contaId, cartaoI
 }
 
 
-function MoneyInput({ value, onChange, style, placeholder="0,00", ...props }) {
-  return (
-    <input
-      {...props}
-      style={style}
-      type="text"
-      inputMode="numeric"
-      placeholder={placeholder}
-      value={value || ""}
-      onChange={e=>onChange(maskMoneyInput(e.target.value))}
-    />
-  );
-}
+// v0.3.37 — Fase 2 (DEC-0038): MoneyInput extraído para
+// components/atoms/MoneyInput.jsx.
 
 function formatMonthShort(monthKey) {
   if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return "";
@@ -4255,10 +4250,13 @@ export default function App() {
             </div>
           )}
 
-        {/* COFRINHOS — v0.3.34 (DEC-0035/RN032) */}
+        {/* COFRINHOS — v0.3.34 (DEC-0035/RN032). Fase 2 (DEC-0038): primeira
+            organism a adotar os atoms novos (Card/Badge/ProgressBar/
+            Button/GhostButton/IconButton), como prova de conceito antes do
+            rollout amplo da Fase 4. */}
         {tab==="cofrinhos"&&(
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <div style={card()}>
+            <Card>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
                 <div>
                   <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>🐷 Cofrinhos</div>
@@ -4266,14 +4264,14 @@ export default function App() {
                     Objetivos de poupança com ledger próprio de aportes/retiradas — não é a mesma coisa que Metas (limite de gasto por categoria) e não movimenta o saldo das suas contas.
                   </div>
                 </div>
-                <button onClick={()=>{ setForm({ dataAlvo:addMonthsToDate(todayIso(),6) }); setModal("addCofrinho"); }} style={btn(C.emerald)}>+ Novo cofrinho</button>
+                <Button onClick={()=>{ setForm({ dataAlvo:addMonthsToDate(todayIso(),6) }); setModal("addCofrinho"); }}>+ Novo cofrinho</Button>
               </div>
-            </div>
+            </Card>
 
             {cofrinhos.length===0 ? (
-              <div style={card()}>
+              <Card>
                 <div style={{ fontSize:13, color:C.soft, textAlign:"center", padding:"20px 0" }}>Nenhum cofrinho ainda. Crie o primeiro para simular o aporte mensal necessário até a data-alvo.</div>
-              </div>
+              </Card>
             ) : (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))", gap:14 }}>
                 {cofrinhos.map(cof=>{
@@ -4285,23 +4283,17 @@ export default function App() {
                     em_dia:{ label:"Em dia", color:C.gold },
                   }[sim.status];
                   return (
-                    <div key={cof.id} style={card()}>
-                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, marginBottom:8 }}>
-                        <div>
-                          <div style={{ fontWeight:700, fontSize:14 }}>{cof.nome}</div>
-                          <div style={{ fontSize:11, color:C.soft, marginTop:2 }}>Alvo: {fmtDate(cof.dataAlvo)}</div>
-                        </div>
-                        <span style={{ fontSize:10, background:statusInfo.color+"22", color:statusInfo.color, padding:"3px 8px", borderRadius:20, fontWeight:700, whiteSpace:"nowrap" }}>{statusInfo.label}</span>
-                      </div>
-
-                      <div style={{ display:"flex", alignItems:"baseline", gap:6, marginBottom:6 }}>
-                        <span style={{ fontSize:20, fontWeight:800, color:C.text }}>{fmtBRL(sim.saldoAtual)}</span>
-                        <span style={{ fontSize:12, color:C.soft }}>/ {fmtBRL(cof.valorAlvo)}</span>
-                      </div>
-                      <div style={{ background:C.border, borderRadius:4, height:8, overflow:"hidden", marginBottom:4 }}>
-                        <div style={{ height:8, borderRadius:4, width:`${Math.min(100,pct*100)}%`, background:statusInfo.color, transition:"width .3s" }}/>
-                      </div>
-                      <div style={{ fontSize:11, color:C.soft, marginBottom:10 }}>{(pct*100).toFixed(0)}% do alvo</div>
+                    <Card key={cof.id}>
+                      <ProgressStat
+                        title={cof.nome}
+                        subtitle={`Alvo: ${fmtDate(cof.dataAlvo)}`}
+                        badgeLabel={statusInfo.label}
+                        badgeColor={statusInfo.color}
+                        valueLabel={<div style={{ display:"flex", alignItems:"baseline", gap:6 }}><span style={{ fontSize:20, fontWeight:800, color:C.text }}>{fmtBRL(sim.saldoAtual)}</span><span style={{ fontSize:12, color:C.soft }}>/ {fmtBRL(cof.valorAlvo)}</span></div>}
+                        pct={pct}
+                        barColor={statusInfo.color}
+                        caption={`${(pct*100).toFixed(0)}% do alvo`}
+                      />
 
                       {sim.status!=="concluido" && (
                         <div style={{ background:C.navy, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12 }}>
@@ -4311,9 +4303,9 @@ export default function App() {
                       )}
 
                       <div style={{ display:"flex", gap:8, marginBottom:cof.aportes.length?10:0 }}>
-                        <button onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"aporte", data:todayIso() }); setModal("movimentoCofrinho"); }} style={btn(C.emerald,{ flex:1, padding:"7px 10px", fontSize:12 })}>+ Aporte</button>
-                        <button onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"retirada", data:todayIso() }); setModal("movimentoCofrinho"); }} style={btn(C.coral,{ flex:1, padding:"7px 10px", fontSize:12 })} disabled={sim.saldoAtual<=0}>− Retirada</button>
-                        <button onClick={()=>{ if(window.confirm(`Excluir o cofrinho "${cof.nome}"? O histórico de aportes será perdido.`)) excluirCofrinho(cof.id); }} style={ghost({ padding:"7px 10px" })} title="Excluir cofrinho">🗑</button>
+                        <Button bg={C.emerald} style={{ flex:1, padding:"7px 10px", fontSize:12 }} onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"aporte", data:todayIso() }); setModal("movimentoCofrinho"); }}>+ Aporte</Button>
+                        <Button bg={C.coral} style={{ flex:1, padding:"7px 10px", fontSize:12 }} disabled={sim.saldoAtual<=0} onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"retirada", data:todayIso() }); setModal("movimentoCofrinho"); }}>− Retirada</Button>
+                        <GhostButton style={{ padding:"7px 10px" }} title="Excluir cofrinho" onClick={()=>{ if(window.confirm(`Excluir o cofrinho "${cof.nome}"? O histórico de aportes será perdido.`)) excluirCofrinho(cof.id); }}>🗑</GhostButton>
                       </div>
 
                       {cof.aportes.length>0 && (
@@ -4323,13 +4315,13 @@ export default function App() {
                               <span>{fmtDate(mv.data)} — {mv.tipo==="retirada"?"Retirada":"Aporte"}</span>
                               <span style={{ display:"flex", alignItems:"center", gap:6 }}>
                                 <strong style={{ color:mv.tipo==="retirada"?C.coral:C.emerald }}>{mv.tipo==="retirada"?"−":"+"}{fmtBRL(mv.valor)}</strong>
-                                <button onClick={()=>excluirMovimentoCofrinho(cof.id, mv.id)} style={{ background:"transparent", border:"none", color:C.muted, cursor:"pointer", fontSize:12 }}>×</button>
+                                <IconButton style={{ fontSize:12 }} onClick={()=>excluirMovimentoCofrinho(cof.id, mv.id)}>×</IconButton>
                               </span>
                             </div>
                           ))}
                         </div>
                       )}
-                    </div>
+                    </Card>
                   );
                 })}
               </div>
@@ -4961,27 +4953,26 @@ export default function App() {
                 <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>Novo cofrinho</h3>
                 <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>Ledger próprio de aportes/retiradas, independente das suas contas (RN032).</div>
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <div><div style={lbl}>Nome</div><input style={inp} placeholder="Ex: Viagem, Reserva de emergência" value={form.nome||""} onChange={e=>setForm(f=>({...f,nome:e.target.value}))}/></div>
-                  <div><div style={lbl}>Valor-alvo (R$)</div><MoneyInput style={inp} value={form.valorAlvo||""} onChange={value=>setForm(f=>({...f,valorAlvo:value}))}/></div>
-                  <div><div style={lbl}>Data-alvo</div><DateInput style={inp} value={form.dataAlvo||""} onChange={value=>setForm(f=>({...f,dataAlvo:value}))}/></div>
+                  <FormField label="Nome"><input style={inp} placeholder="Ex: Viagem, Reserva de emergência" value={form.nome||""} onChange={e=>setForm(f=>({...f,nome:e.target.value}))}/></FormField>
+                  <FormField label="Valor-alvo (R$)"><MoneyInput style={inp} value={form.valorAlvo||""} onChange={value=>setForm(f=>({...f,valorAlvo:value}))}/></FormField>
+                  <FormField label="Data-alvo"><DateInput style={inp} value={form.dataAlvo||""} onChange={value=>setForm(f=>({...f,dataAlvo:value}))}/></FormField>
                 </div>
-                <div style={{ display:"flex", gap:9, marginTop:16 }}>
-                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
-                  <button onClick={criarCofrinho} style={btn(C.emerald,{ flex:1 })}>Criar cofrinho</button>
-                </div>
+                <ModalFooter onCancel={closeModal} onConfirm={criarCofrinho} confirmLabel="Criar cofrinho" />
               </>
             )}
             {modal==="movimentoCofrinho"&&(
               <>
                 <h3 style={{ margin:"0 0 14px", fontWeight:800 }}>{form.tipoMovimento==="retirada"?"Retirada do cofrinho":"Aporte no cofrinho"}</h3>
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></div>
-                  <div><div style={lbl}>Data</div><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></div>
+                  <FormField label="Valor (R$)"><MoneyInput style={inp} value={form.valor||""} onChange={value=>setForm(f=>({...f,valor:value}))}/></FormField>
+                  <FormField label="Data"><DateInput style={inp} value={form.data||""} onChange={value=>setForm(f=>({...f,data:value}))}/></FormField>
                 </div>
-                <div style={{ display:"flex", gap:9, marginTop:16 }}>
-                  <button onClick={closeModal} style={btn(C.border,{ flex:1 })}>Cancelar</button>
-                  <button onClick={registrarMovimentoCofrinho} style={btn(form.tipoMovimento==="retirada"?C.coral:C.emerald,{ flex:1 })}>{form.tipoMovimento==="retirada"?"Confirmar retirada":"Confirmar aporte"}</button>
-                </div>
+                <ModalFooter
+                  onCancel={closeModal}
+                  onConfirm={registrarMovimentoCofrinho}
+                  confirmBg={form.tipoMovimento==="retirada"?C.coral:C.emerald}
+                  confirmLabel={form.tipoMovimento==="retirada"?"Confirmar retirada":"Confirmar aporte"}
+                />
               </>
             )}
             {modal==="editRecorrencia"&&(

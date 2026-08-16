@@ -1,15 +1,17 @@
+import { C } from "../../theme/tokens.js";
+
 export function CashFlowChart({ data = [], height = 220, colors = {} }) {
   const safeData = Array.isArray(data) ? data : [];
   const width = Math.max(640, safeData.length * 74);
   const padding = { top: 18, right: 28, bottom: 46, left: 78 };
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
-  const saldoColor = colors.saldo || "#F5B700";
-  const entradaColor = colors.entradas || "#00A878";
-  const saidaColor = colors.saidas || "#E8504A";
-  const textColor = colors.text || "#E8EDF4";
-  const softColor = colors.soft || "#8FA8C0";
-  const gridColor = colors.grid || "#1E3050";
+  const saldoColor = colors.saldo || C.gold;
+  const entradaColor = colors.entradas || C.emerald;
+  const saidaColor = colors.saidas || C.coral;
+  const textColor = colors.text || C.text;
+  const softColor = colors.soft || C.soft;
+  const gridColor = colors.grid || C.border;
 
   if (!safeData.length) {
     return <div style={{ height, display:"flex", alignItems:"center", justifyContent:"center", color:softColor, fontSize:13 }}>Sem dados para exibir.</div>;

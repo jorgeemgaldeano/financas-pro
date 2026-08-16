@@ -1873,3 +1873,96 @@ sincronização é uma camada acima do formato já existente).
 Nenhum nesta sessão. A análise futura provavelmente vai propor mudança em
 `RN018` (restauração hoje é "substituir tudo") para acomodar merge — a
 decidir formalmente quando essa análise for feita.
+
+## DEC-0038 — Atomic Design do front-end absorvido na v0.3.37
+
+Data: 2026-08-16
+
+### Contexto
+
+Pedido do usuário: analisar o front-end sob a lente de Atomic Design
+(atoms/molecules/organisms/templates) e propor melhorias, combinando com o
+backlog já existente da v0.3.37. Mapa factual do estado atual (via
+subagente de exploração, sem tocar código):
+
+- Os helpers de estilo (`card()`, `lbl`, `big()`, `inp`, `btn()`,
+  `ghost()`) são fechamentos declarados dentro da própria função `App()`
+  (`App.jsx:2365`) — não reutilizáveis fora dela por construção. Existe uma
+  **segunda cópia quase idêntica** (`btn2`/`ghost2`) dentro de `ParamsTab`.
+- Padrões visuais repetidos sem componente próprio: barra de progresso
+  (duplicada quase igual entre Metas e Cofrinhos), "stat tile"
+  (label+valor), input com label emparelhado à mão (46+ ocorrências),
+  botão "×" de excluir (15 ocorrências).
+- Abas inteiras inline dentro do `return` de `App()`: Projeções (~199
+  linhas), Dashboard (~167), Importação (~153), Contas (~119), Metas
+  (~98), Cofrinhos (~82). Só `Pessoas`/`Parâmetros` foram extraídas como
+  componente próprio até hoje.
+- Os 7 componentes já extraídos (`components/ui`, `components/finance`,
+  `components/charts`) evitaram o problema em vez de resolvê-lo: cada um
+  define seu próprio `DEFAULT_COLORS`/`colors` em vez de consumir uma
+  fonte única de tokens — já existe drift de paleta entre telas.
+- Switch de modais: 6 modais num bloco só de ~310 linhas no fim do
+  arquivo; o modal `addTrans` sozinho tem ~189 linhas.
+
+### Decisão
+
+1. **Reorganizar a camada de apresentação em Atomic Design**, em 5 fases
+   sequenciais, cada uma validável isoladamente antes da próxima: (1)
+   tokens (`src/theme/tokens.js`, paleta `C` centralizada), (2) atoms
+   (`Button`, `Card`, `Label`, `StatValue`, `ProgressBar`, `Badge`,
+   `IconButton`, `MoneyInput`), (3) molecules (`FormField`, `StatTile`,
+   `ProgressCard`, `ModalShell`), (4) organisms (uma aba/modal = um
+   componente, das menores pras maiores, mesmo padrão já provado em
+   `PessoasTab`/`ParamsTab`), (5) template/page (`AppShell`, `App.jsx`
+   reduzido a orquestração).
+2. **Escopo absorvido na v0.3.37**, não numa versão nova separada — decisão
+   explícita do usuário (eu havia proposto v0.3.39 separada, como opção
+   B, por ser mais conservador dado o tamanho da mudança; ele preferiu
+   manter tudo na v0.3.37, mesmo isso tornando a versão maior que o normal
+   do projeto).
+3. **Nenhum código escrito nesta sessão** — só a análise, a decisão de
+   forma e o sequenciamento por fase.
+
+### Alternativas avaliadas
+
+- **v0.3.39 separada, depois da v0.3.38** (minha recomendação inicial):
+  mantém a v0.3.37 enxuta, só com a extração de serviços já planejada em
+  2026-07-08; separa uma reorganização de arquitetura do mesmo porte que a
+  decisão de sincronização mereceu (`DEC-0037`) em sua própria versão.
+  Descartada por decisão explícita do usuário.
+- **Reescrita para JS Vanilla** (framing inicial do pedido do usuário):
+  descartada antes mesmo de eu propor as fases — confirmado com o usuário
+  que o pedido real era revisão com a lente de Atomic Design dentro do
+  stack React/Vite já existente, não uma migração de framework. Uma
+  reescrita completa reprovaria a própria regra inegociável do
+  `CLAUDE.md` do projeto ("não quebrar comportamento existente") num app
+  financeiro em produção.
+
+### Consequências positivas
+
+- Fecha o risco de drift de paleta entre telas (fase 1, tokens).
+- Reduz duplicação real já observada (ex.: barra de progresso repetida
+  entre Metas e Cofrinhos) via `ProgressCard` (fase 3).
+- `App.jsx` sai de ~5.000 linhas para uma faixa realista de 600-800
+  (fase 5), alinhado com a diretriz já existente no `CLAUDE.md`
+  ("Preferir extração... Modularização > crescimento monolítico").
+
+### Consequências negativas ou riscos
+
+- v0.3.37 fica maior e mais longa que as versões anteriores do projeto —
+  risco aceito conscientemente pelo usuário.
+- Maior superfície de mudança que uma extração pontual de serviços — cada
+  fase precisa ser validada visualmente (preview) antes da próxima, para
+  não acumular regressão silenciosa numa reorganização desse tamanho.
+- Ordem de extração de organisms (fase 4) prioriza risco, não valor de
+  negócio — abas de maior tráfego (Dashboard, Projeções) ficam para o
+  fim, quando o padrão de extração já estiver validado nas menores.
+
+### Impacto em LocalStorage
+
+Nenhum. É reorganização de camada de apresentação — não toca persistência,
+formato de dados, chave, prefixo ou schema.
+
+### Impacto em regra de negócio
+
+Nenhum. Mudança puramente estrutural/visual — nenhuma RN é alterada.
