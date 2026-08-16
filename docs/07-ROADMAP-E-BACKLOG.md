@@ -1118,11 +1118,13 @@ uma testável/validável isoladamente antes de seguir para a próxima:**
   compartilhada extraída no caminho: `categoryTreeUtils.js`,
   `simulationService.js` (item 1 do backlog original, com 11 testes
   novos), `BarChart`/`DonutChart`. `App.jsx`: 5.048 → 3.727 linhas (-26%).
-- [ ] **Fase 4 — Organisms (modais).** Os 6 modais do switch em
+- [x] **Fase 4 — Organisms (modais).** Os 6 modais do switch em
   `App.jsx` (`addTrans`, `addTransfer`, `addCofrinho`,
-  `movimentoCofrinho`, `editRecorrencia`, `addCard`) ainda estão inline —
-  extrair os 5 pequenos antes do `addTrans` (~189 linhas, formulário mais
-  usado do app — maior risco).
+  `movimentoCofrinho`, `editRecorrencia`, `addCard`) viraram
+  `components/organisms/modals/`. `addTrans` (~189 linhas, formulário
+  mais usado do app) deixado por último, validado no preview (modo
+  cartão, parcelamento com preview de cálculo). `App.jsx`: 5.048 → 3.457
+  linhas (-32%).
 - [ ] **Fase 5 — Template/Page.** Só depois que os organisms já saíram:
   extrair `AppShell` (sidebar+topbar+slot de conteúdo, hoje misturado no
   `return` de `App()`). `App.jsx` fica reduzido a orquestração de
