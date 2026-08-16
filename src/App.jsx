@@ -33,6 +33,8 @@ import { CategorySelect } from "./components/molecules/CategorySelect.jsx";
 import { safeMoneyAmount, normalizeSimulationInstallments, getSimulationInstallmentValue, expandSim } from "./services/simulationService.js";
 import { SimulacoesTab } from "./components/organisms/SimulacoesTab.jsx";
 import { CofrinhosTab } from "./components/organisms/CofrinhosTab.jsx";
+import { LancamentosTab } from "./components/organisms/LancamentosTab.jsx";
+import { CartoesTab } from "./components/organisms/CartoesTab.jsx";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
 // worker para o chunk principal, que é carregado em toda navegação.
@@ -3564,66 +3566,12 @@ export default function App() {
 
         {/* LANÇAMENTOS */}
         {tab==="lancamentos"&&(
-          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", gap:12, alignItems:"center", flexWrap:"wrap" }}>
-              <div style={{ color:C.soft, fontSize:12 }}>
-                {transactionFilters.dataInicio || transactionFilters.dataFim
-                  ? "Filtro por período ativo"
-                  : `Exibindo mês selecionado: ${formatMonthBR(selMonth)}`}
-              </div>
-              <div style={{ display:"flex", gap:9 }}>
-                <button onClick={()=>{ setForm({ fromAccountId:contasCorrentes[0]?.id||"", toAccountId:contasCorrentes[1]?.id||"", data:todayIso() }); setModal("addTransfer"); }} style={btn("#0891B2")} disabled={contasCorrentes.length<2}>🔁 Transferir</button>
-                <button onClick={openAddTrans} style={btn(C.emerald)}>+ Novo Lançamento</button>
-              </div>
-            </div>
-
-            <TransactionFiltersPanel
-              filters={transactionFilters}
-              onChange={setTransactionFilters}
-              onClear={()=>setTransactionFilters(EMPTY_TRANSACTION_FILTERS)}
-              rootCats={rootCats}
-              card={card}
-              lbl={lbl}
-              inp={inp}
-              ghost={ghost}
-            />
-
-            <div style={card({ padding:0, overflow:"hidden" })}>
-              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-                <thead><tr style={{ background:C.border }}>{["Data","Descrição","Categoria","Origem","Tipo","Status","Valor",""] .map(h=><th key={h} style={{ padding:"9px 13px", textAlign:"left", fontWeight:600, color:C.soft, fontSize:11 }}>{h}</th>)}</tr></thead>
-                <tbody>
-                  {filteredTransactions.length===0&&<tr><td colSpan={8} style={{ padding:28, textAlign:"center", color:C.soft }}>Nenhum lançamento encontrado para os filtros informados.</td></tr>}
-                  {filteredTransactions.map(t=>(
-                    <tr key={t.id} style={{ borderTop:`1px solid ${C.border}` }}>
-                      <td style={{ padding:"9px 13px", color:C.soft }}>{fmtDate(t.data)}</td>
-                      <td style={{ padding:"9px 13px" }}>
-                        {t.descricao}
-                        {t.fixo&&<span style={{ marginLeft:5, fontSize:10, background:C.border, padding:"2px 5px", borderRadius:4, color:C.soft }}>fixo</span>}
-                        {t.totalParcelas&&<span style={{ marginLeft:5, fontSize:10, background:C.gold+"22", padding:"2px 5px", borderRadius:4, color:C.gold }}>{t.parcela}/{t.totalParcelas}×</span>}
-                        {t.importado&&<span style={{ marginLeft:5, fontSize:10, background:C.emerald+"22", padding:"2px 5px", borderRadius:4, color:C.emerald }}>importado</span>}
-                      </td>
-                      <td style={{ padding:"9px 13px", minWidth:210 }}>
-                        {isTransfer(t)?<span style={{ color:C.soft, fontSize:12 }}>— (transferência)</span>:renderCategoryEditor(t)}
-                      </td>
-                      <td style={{ padding:"9px 13px", color:C.soft, fontSize:12 }}>{t.origem==="cartao"?(cards.find(c=>c.id===t.cartaoId)?.nome||"Cartão"):t.origem==="vale_alimentacao"?"🛒 Vale Alim.":t.origem==="vale_refeicao"?"🍽️ Vale Ref.":"🏦 Corrente"}</td>
-                      <td style={{ padding:"9px 13px" }}>{isTransfer(t)?<span style={{ color:"#0891B2", fontWeight:600, fontSize:12 }}>🔁 Transferência</span>:<span style={{ color:t.tipo==="receita"?C.emerald:C.coral, fontWeight:600, fontSize:12 }}>{t.tipo==="receita"?"↑ Receita":"↓ Despesa"}</span>}</td>
-                      <td style={{ padding:"9px 13px" }}>
-                        <span style={{ fontSize:11, fontWeight:700, padding:"2px 7px", borderRadius:20, background:(t.status==="previsto"?C.gold:t.status==="parcial"?"#CE93D8":C.emerald)+"22", color:t.status==="previsto"?C.gold:t.status==="parcial"?"#CE93D8":C.emerald }}>
-                          {t.status==="previsto"?"Previsto":t.status==="parcial"?`Parcial (${fmtBRL(t.valorPago||0)})`:"Pago"}
-                        </span>
-                      </td>
-                      <td style={{ padding:"9px 13px", fontWeight:700, color:t.tipo==="receita"?C.emerald:C.text }}>{t.tipo==="receita"?"+":"-"}{fmtBRL(valorExibicaoLancamento(t))}</td>
-                      <td style={{ padding:"9px 13px", display:"flex", gap:5, alignItems:"center" }}>
-                        {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.emerald })}>Baixar</button>}
-                        {(t.status==="previsto"||t.status==="parcial")&&<button onClick={()=>baixarParcialTrans(t.id)} style={ghost({ padding:"3px 7px", fontSize:11, color:C.gold })}>Parcial</button>}
-                        <button onClick={()=>isTransfer(t)?excluirTransferencia(t.transferId):delTrans(t.id)} style={{ background:"transparent", border:"none", color:C.coral, cursor:"pointer", fontSize:16 }}>×</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <LancamentosTab
+            transactionFilters={transactionFilters} setTransactionFilters={setTransactionFilters} rootCats={rootCats} card={card} lbl={lbl} inp={inp} ghost={ghost}
+            contasCorrentes={contasCorrentes} setForm={setForm} setModal={setModal} openAddTrans={openAddTrans}
+            filteredTransactions={filteredTransactions} cards={cards} renderCategoryEditor={renderCategoryEditor} valorExibicaoLancamento={valorExibicaoLancamento}
+            baixarTrans={baixarTrans} baixarParcialTrans={baixarParcialTrans} delTrans={delTrans} excluirTransferencia={excluirTransferencia} selMonth={selMonth}
+          />
         )}
 
         {/* RECORRÊNCIAS */}
@@ -3706,62 +3654,11 @@ export default function App() {
 
         {/* CARTÕES */}
         {tab==="cartoes"&&(
-          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <div style={{ display:"flex", justifyContent:"flex-end" }}><button onClick={()=>{ setModal("addCard"); setForm({ cor:"#00A878", contaPagamentoId:primeiraContaCorrenteId, accountId:primeiraContaCorrenteId }); }} style={btn(C.emerald)}>+ Adicionar Cartão</button></div>
-            {cardTotals.map(c=>{ const fatura=dateForMonthDay(selMonth,c.fechamento); const venc=dateForMonthDay(monthOffset(selMonth,1),c.vencimento); const tc=monthTrans.filter(t=>t.cartaoId===c.id&&t.origem==="cartao"); const aberto = expandedCards[c.id] ?? true; return (
-              <div key={c.id} style={card()}>
-                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                    <div style={{ width:38, height:24, borderRadius:6, background:c.cor, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700 }}>{c.nome.slice(0,2).toUpperCase()}</div>
-                    <div><div style={{ fontWeight:800, fontSize:14 }}>{c.nome}</div><div style={{ fontSize:12, color:C.soft }}>Limite: {fmtBRL(c.limite)} · Fecha {c.fechamento} · Vence {c.vencimento} · Conta: {c.contaPagamentoNome}</div></div>
-                  </div>
-                  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                    <div style={{ textAlign:"right" }}><div style={lbl}>Fatura atual</div><div style={{ fontSize:18, fontWeight:800, color:c.gasto/c.limite>params.alertaLimite/100?C.coral:C.text }}>{fmtBRL(c.gasto)}</div></div>
-                    <button onClick={()=>toggleCardAccordion(c.id)} aria-expanded={aberto} style={ghost({ padding:"5px 10px", fontSize:13 })}>{aberto?"▲ Fechar":"▼ Abrir"}</button>
-                  </div>
-                </div>
-                {aberto&&<>
-                <div style={{ background:C.border, borderRadius:5, height:6, marginBottom:6 }}><div style={{ height:6, borderRadius:5, width:`${Math.min(100,(c.gasto/c.limite)*100)}%`, background:c.gasto/c.limite>params.alertaLimite/100?C.coral:c.cor }}/></div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:C.soft, marginBottom:14 }}><span>{((c.gasto/c.limite)*100).toFixed(0)}% utilizado</span><span>Disponível: {fmtBRL(c.disponivel)}</span></div>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:9, marginBottom:14 }}>
-                  <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px" }}><div style={lbl}>Fechamento</div><div style={{ fontWeight:700 }}>{fmtDate(fatura)}</div></div>
-                  <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px" }}><div style={lbl}>Vencimento previsto</div><div style={{ fontWeight:700 }}>{fmtDate(venc)}</div></div>
-                  <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px", border:`1px solid ${c.invoiceClosureStatus==="open"?C.emerald:C.gold}55` }}>
-                    <div style={lbl}>Situação da fatura</div>
-                    <div style={{ fontWeight:800, color:c.invoiceClosureStatus==="open"?C.emerald:C.gold }}>{c.invoiceClosureLabel}</div>
-                  </div>
-                  <div style={{ background:C.navy, borderRadius:7, padding:"9px 12px", border:`1px solid ${c.invoicePaidAmount>=c.invoiceTotal&&c.invoiceTotal>0?C.emerald:c.invoicePaidAmount>0?C.gold:C.coral}55` }}>
-                    <div style={lbl}>Pagamento</div>
-                    <div style={{ fontWeight:800, color:c.invoicePaidAmount>=c.invoiceTotal&&c.invoiceTotal>0?C.emerald:c.invoicePaidAmount>0?C.gold:C.coral }}>{c.invoicePaymentStatusLabel}</div>
-                    <div style={{ fontSize:10, color:C.soft, marginTop:3 }}>Pago {fmtBRL(c.invoicePaidAmount)} · Pendente {fmtBRL(c.invoicePendingAmount)}</div>
-                  </div>
-                </div>
-                <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
-                  <button onClick={()=>adicionarAjusteFatura(c.id,"acrescimo")} style={btn(C.gold,{ color:C.navy, fontSize:12, padding:"6px 12px" })}>+ Ajuste fatura</button>
-                  <button onClick={()=>adicionarAjusteFatura(c.id,"reducao")} style={btn(C.border,{ fontSize:12, padding:"6px 12px" })}>− Ajuste fatura</button>
-                  {c.invoiceClosureStatus!=="open"&&<button onClick={()=>abrirFaturaCartao(c.id)} style={btn(C.gold,{ color:C.navy, fontSize:12, padding:"6px 12px" })}>Reabrir fatura</button>}
-                  <button onClick={()=>fecharFaturaCartao(c.id)} style={btn(C.emerald,{ fontSize:12, padding:"6px 12px" })}>Fechar fatura e lançar pagamento previsto</button>
-                  <button onClick={()=>exportCreditCardExpensesTxt(c.id, selMonth)} style={btn(C.border,{ fontSize:12, padding:"6px 12px" })}>Exportar TXT</button>
-                </div>
-                {tc.length>0&&(
-                  <table style={{ width:"100%", fontSize:12, borderCollapse:"collapse" }}>
-                    <thead><tr>{["Data","Descrição","Categoria","Valor"].map(h=><th key={h} style={{ textAlign:"left", color:C.soft, fontSize:10, padding:"3px 7px", borderBottom:`1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
-                    <tbody>
-                      {tc.map(t=>(
-                        <tr key={t.id}>
-                          <td style={{ padding:"6px 7px", color:C.soft }}>{fmtDate(t.data)}</td>
-                          <td style={{ padding:"6px 7px" }}>{t.descricao}{t.natureza==="ajuste_fatura_cartao"&&<span style={{ marginLeft:3, fontSize:9, background:C.gold+"22", padding:"1px 4px", borderRadius:3, color:C.gold }}>ajuste</span>}{t.totalParcelas&&<span style={{ marginLeft:3, fontSize:9, background:C.gold+"22", padding:"1px 4px", borderRadius:3, color:C.gold }}>{t.parcela}/{t.totalParcelas}×</span>}</td>
-                          <td style={{ padding:"6px 7px", minWidth:190 }}>{renderCategoryEditor(t, true)}</td>
-                          <td style={{ padding:"6px 7px", fontWeight:700, color:signedCardAmount(t)<0?C.emerald:C.text }}>{signedCardAmount(t)<0?"-":""}{fmtBRL(Math.abs(signedCardAmount(t)))}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                </>}
-              </div>
-            );})}
-          </div>
+          <CartoesTab
+            cardTotals={cardTotals} selMonth={selMonth} monthTrans={monthTrans} params={params} expandedCards={expandedCards} toggleCardAccordion={toggleCardAccordion}
+            primeiraContaCorrenteId={primeiraContaCorrenteId} setModal={setModal} setForm={setForm} card={card} lbl={lbl} ghost={ghost} btn={btn}
+            renderCategoryEditor={renderCategoryEditor} adicionarAjusteFatura={adicionarAjusteFatura} abrirFaturaCartao={abrirFaturaCartao} fecharFaturaCartao={fecharFaturaCartao} exportCreditCardExpensesTxt={exportCreditCardExpensesTxt}
+          />
         )}
 
         {/* CONTAS */}
