@@ -1,3 +1,5 @@
+export const MONTHS = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+
 export const fmtDate = value => new Date(value + "T12:00").toLocaleDateString("pt-BR");
 
 export const mKey = value => (value || "").slice(0, 7);

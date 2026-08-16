@@ -5,7 +5,7 @@ import { ConfirmDialog } from "./components/ui/ConfirmDialog.jsx";
 import { useToasts, ToastHost } from "./components/ui/Toast.jsx";
 import { moveCardTransactions, moveAccountTransactions, recategorizeCategory } from "./services/reassignmentService.js";
 import { createTransfer, deleteTransfer, isTransfer } from "./services/transferService.js";
-import { addMovimentoCofrinho, createCofrinho, deleteCofrinho, removeMovimentoCofrinho, saldoCofrinho, setArquivadoCofrinho, simularAporteMensal, statusCofrinho } from "./services/cofrinhoService.js";
+import { addMovimentoCofrinho, createCofrinho, deleteCofrinho, removeMovimentoCofrinho } from "./services/cofrinhoService.js";
 import { createSaldoInicialResolver, transMonthKey, valorRealizado } from "./services/saldoService.js";
 import { findTransferMatchCandidates, linkImportedRowAsTransfer, revertTransferLinksFromBatch } from "./services/transferMatchService.js";
 import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
@@ -15,7 +15,7 @@ import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } fro
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
 import { fmtBRL, moneyToNumber } from "./utils/moneyUtils.js";
-import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, monthCompare, monthOffset, todayIso, todayMonthKey } from "./utils/dateUtils.js";
+import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, MONTHS, monthCompare, monthOffset, todayIso, todayMonthKey } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
 import { closeInvoice, reopenInvoice, addInvoiceAdjustment, computeCardInvoice, resolveInvoiceCategoryId } from "./services/cardInvoiceOperations.js";
 import { buildProjectionInsights, buildRealCashFlowProjection } from "./services/projectionService.js";
@@ -24,14 +24,15 @@ import { CardInstallmentDivergencePanel } from "./components/finance/CardInstall
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
 import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditDiscardedOnImport, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
 import { getOrphanDividas } from "./utils/dividaUtils.js";
+import { catColor, catIcon, catLabel, collectCatAndDescendantIds, findCat, findRootCat, flattenCats } from "./utils/categoryTreeUtils.js";
 import { C } from "./theme/tokens.js";
 import { MoneyInput } from "./components/atoms/MoneyInput.jsx";
-import { Card } from "./components/atoms/Card.jsx";
-import { Button, GhostButton } from "./components/atoms/Button.jsx";
-import { IconButton } from "./components/atoms/IconButton.jsx";
 import { FormField } from "./components/molecules/FormField.jsx";
-import { ProgressStat } from "./components/molecules/ProgressStat.jsx";
 import { ModalFooter } from "./components/molecules/ModalFooter.jsx";
+import { CategorySelect } from "./components/molecules/CategorySelect.jsx";
+import { safeMoneyAmount, normalizeSimulationInstallments, getSimulationInstallmentValue, expandSim } from "./services/simulationService.js";
+import { SimulacoesTab } from "./components/organisms/SimulacoesTab.jsx";
+import { CofrinhosTab } from "./components/organisms/CofrinhosTab.jsx";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
 // worker para o chunk principal, que é carregado em toda navegação.
@@ -295,7 +296,7 @@ const INIT_TRANS = [
   { id:"t22", tipo:"despesa", origem:"vale_refeicao",   catId:"sub1b",  descricao:"Restaurante VR",  valor:55,   data:dd(13),   cartaoId:null, contaId:"vr1", fixo:false },
 ];
 
-const MONTHS  = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+// v0.3.37 — Fase 4 (DEC-0038): MONTHS movido para utils/dateUtils.js.
 // v0.3.26.7 — E5: IDs são usados como chave de vínculo (invoiceId, parcelaGrupo,
 // paymentTransactionId). Math.random().slice(2,9) gera só 7 chars e ao longo de
 // anos de importações em lote pode colidir e corromper vínculos silenciosamente.
@@ -503,41 +504,8 @@ function MonthShortInput({ value, onChange, style, ...props }) {
 }
 
 // ── Category tree helpers
-function flattenCats(cats, depth=0, parentId=null, parentPath="") {
-  const rows=[];
-  for (const cat of cats) {
-    const path = parentPath ? `${parentPath} › ${cat.nome}` : cat.nome;
-    rows.push({ id:cat.id, nome:cat.nome, cor:cat.cor||null, icon:cat.icon||null, depth, parentId, path, hasSubs:!!(cat.subs?.length) });
-    if (cat.subs?.length) rows.push(...flattenCats(cat.subs, depth+1, cat.id, path));
-  }
-  return rows;
-}
-function findCat(cats, id) {
-  for (const c of cats) { if (c.id===id) return c; if (c.subs?.length) { const r=findCat(c.subs,id); if(r) return r; } }
-  return null;
-}
-function findRootCat(cats, id) {
-  for (const c of cats) { if (c.id===id) return c; if (c.subs?.length && findCat(c.subs,id)) return c; }
-  return null;
-}
-function catColor(cats, id) { return findRootCat(cats,id)?.cor||"#B0BEC5"; }
-function catIcon(cats, id)  { return findRootCat(cats,id)?.icon||"📦"; }
-function catLabel(cats, id) { return flattenCats(cats).find(f=>f.id===id)?.path||id; }
-function collectCatAndDescendantIds(cats, id) {
-  const ids = new Set();
-  const collect = (list) => {
-    for (const c of list) {
-      if (c.id === id) {
-        const addAll = (node) => { ids.add(node.id); (node.subs||[]).forEach(addAll); };
-        addAll(c);
-      } else if (c.subs?.length) {
-        collect(c.subs);
-      }
-    }
-  };
-  collect(cats);
-  return ids;
-}
+// v0.3.37 — Fase 4 (DEC-0038): funções de árvore de categorias extraídas
+// para utils/categoryTreeUtils.js.
 
 // ── Charts
 function BarChart({ data, color=C.emerald, height=80 }) {
@@ -568,249 +536,12 @@ function DonutChart({ segments, size=120 }) {
 
 
 // ── Simulation helpers ───────────────────────────────────────────────────────
-function safeMoneyAmount(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  return moneyToNumber(value);
-}
+// v0.3.37 — Fase 4 (DEC-0038): safeMoneyAmount/normalizeSimulationInstallments/
+// getSimulationInstallmentValue/expandSim extraídos para
+// services/simulationService.js (item 1 do backlog original da v0.3.37).
 
-function normalizeSimulationInstallments(value) {
-  const parsed = parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-}
-
-function getSimulationInstallmentValue(sim) {
-  const parcelas = normalizeSimulationInstallments(sim?.parcelas);
-  const valorBase = safeMoneyAmount(sim?.valor);
-  const valorParcela = sim?.modoParc === "total" ? valorBase / parcelas : valorBase;
-  return Math.round((Number(valorParcela) || 0) * 100) / 100;
-}
-
-// ── Sim expander
-function expandSim(sim, cards = [], faturas = []) {
-  if (!sim?.data) return [];
-
-  const n = Math.max(1, parseInt(sim.parcelas, 10) || 1);
-  const card = cards.find(c => c.id === sim.cartaoId);
-
-  const vp = getSimulationInstallmentValue(sim);
-
-  const firstCompetence = sim.faturaCompetencia || getCardInvoiceCompetence(sim.data, card, faturas);
-
-  return Array.from({ length:n }, (_, i) => {
-    const dateKey = addMonthsToDate(sim.data, i);
-    const competencia = monthOffset(firstCompetence, i);
-    return {
-      id: sim.id + "_" + i,
-      simId: sim.id,
-      tipo: "despesa",
-      origem: "cartao",
-      cartaoId: sim.cartaoId,
-      catId: sim.catId,
-      descricao: sim.descricao,
-      valor: parseFloat(vp.toFixed(2)),
-      data: dateKey,
-      competencia,
-      parcela: i + 1,
-      totalParcelas: n,
-      simul: true,
-    };
-  });
-}
-
-// ── CategorySelect com autocomplete
-function CategorySelect({ cats, value, onChange, style, validationInfo, fieldKey = "catId" }) {
-  const flat = useMemo(() => flattenCats(cats), [cats]);
-  const selectableCats = useMemo(() => flat.filter(f => !f.hasSubs), [flat]);
-  const selected = useMemo(() => selectableCats.find(f => f.id === value) || null, [selectableCats, value]);
-  const [query, setQuery] = useState(selected?.path || "");
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-
-  useEffect(() => {
-    setQuery(selected?.path || "");
-    setOpen(false);
-    setActiveIndex(0);
-  }, [selected?.path]);
-
-  const normalizeSearch = (text) => normText(String(text || ""));
-  const searchText = normalizeSearch(query);
-  const selectedText = normalizeSearch(selected?.path || "");
-  const shouldSearch = searchText.length > 0 && searchText !== selectedText;
-
-  const suggestions = useMemo(() => {
-    if (!shouldSearch) return [];
-    return selectableCats
-      .filter(cat => normalizeSearch(cat.path).includes(searchText) || normalizeSearch(cat.nome).includes(searchText))
-      .slice(0, 12);
-  }, [selectableCats, searchText, shouldSearch]);
-
-  const selectCategory = (cat) => {
-    if (!cat) return;
-    onChange(cat.id);
-    setQuery(cat.path);
-    setOpen(false);
-    setActiveIndex(0);
-  };
-
-  const clearCategory = () => {
-    onChange("");
-    setQuery("");
-    setOpen(false);
-    setActiveIndex(0);
-  };
-
-  const baseStyle = highlightIfRequired({
-    background:C.navy,
-    border:`1px solid ${C.border}`,
-    borderRadius:8,
-    color:C.text,
-    padding:"8px 34px 8px 12px",
-    fontSize:14,
-    width:"100%",
-    outline:"none",
-    ...style
-  }, validationInfo, fieldKey);
-
-  const wrapperStyle = {
-    position:"relative",
-    width: style?.width || "100%",
-    minWidth: style?.width === "auto" ? 220 : undefined,
-  };
-
-  const finishEditing = () => {
-    const text = query.trim();
-    if (!text) {
-      clearCategory();
-      return;
-    }
-    const exact = selectableCats.find(cat => normalizeSearch(cat.path) === normalizeSearch(text) || normalizeSearch(cat.nome) === normalizeSearch(text));
-    if (exact) {
-      selectCategory(exact);
-      return;
-    }
-    setQuery(selected?.path || "");
-    setOpen(false);
-    setActiveIndex(0);
-  };
-
-  return (
-    <div style={wrapperStyle}>
-      <input
-        type="text"
-        value={query}
-        placeholder="Digite para buscar categoria"
-        style={baseStyle}
-        autoComplete="off"
-        role="combobox"
-        aria-expanded={open && suggestions.length > 0}
-        aria-autocomplete="list"
-        onFocus={e => {
-          setOpen(false);
-          if (selected?.path) e.currentTarget.select();
-        }}
-        onChange={e => {
-          const next = e.target.value;
-          setQuery(next);
-          setActiveIndex(0);
-          if (!next.trim()) {
-            onChange("");
-            setOpen(false);
-            return;
-          }
-          setOpen(true);
-        }}
-        onKeyDown={e => {
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setOpen(true);
-            setActiveIndex(i => Math.min(i + 1, Math.max(0, suggestions.length - 1)));
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setActiveIndex(i => Math.max(i - 1, 0));
-          } else if (e.key === "Enter") {
-            if (open && suggestions[activeIndex]) {
-              e.preventDefault();
-              selectCategory(suggestions[activeIndex]);
-            }
-          } else if (e.key === "Escape") {
-            setOpen(false);
-            setQuery(selected?.path || "");
-          }
-        }}
-        onBlur={() => {
-          window.setTimeout(() => {
-            finishEditing();
-          }, 140);
-        }}
-      />
-      {query && (
-        <button
-          type="button"
-          title="Limpar categoria"
-          onMouseDown={e => e.preventDefault()}
-          onClick={clearCategory}
-          style={{
-            position:"absolute",
-            right:7,
-            top:"50%",
-            transform:"translateY(-50%)",
-            width:22,
-            height:22,
-            borderRadius:999,
-            border:`1px solid ${C.border}`,
-            background:C.surface,
-            color:C.soft,
-            cursor:"pointer",
-            fontSize:13,
-            lineHeight:"18px",
-          }}
-        >×</button>
-      )}
-      {open && shouldSearch && (
-        <div style={{
-          position:"absolute",
-          top:"calc(100% + 4px)",
-          left:0,
-          right:0,
-          zIndex:500,
-          maxHeight:240,
-          overflowY:"auto",
-          background:C.surface,
-          border:`1px solid ${C.border}`,
-          borderRadius:8,
-          boxShadow:"0 12px 28px rgba(0,0,0,0.35)",
-        }}>
-          {suggestions.length > 0 ? suggestions.map((cat, idx) => (
-            <button
-              key={cat.id}
-              type="button"
-              onMouseDown={e => e.preventDefault()}
-              onClick={() => selectCategory(cat)}
-              style={{
-                width:"100%",
-                textAlign:"left",
-                background:idx === activeIndex ? C.border : "transparent",
-                border:"none",
-                color:C.text,
-                padding:"8px 10px",
-                cursor:"pointer",
-                fontSize:12,
-                display:"flex",
-                alignItems:"center",
-                gap:8,
-              }}
-            >
-              <span>{cat.icon || catIcon(cats, cat.id)}</span>
-              <span style={{ flex:1 }}>{cat.path}</span>
-            </button>
-          )) : (
-            <div style={{ color:C.soft, fontSize:12, padding:"9px 10px" }}>Nenhuma categoria encontrada.</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// v0.3.37 — Fase 4 (DEC-0038): CategorySelect extraído para
+// components/molecules/CategorySelect.jsx.
 
 // ── ParamsTab
 // ── PessoasTab ────────────────────────────────────────────────────────────────
@@ -4250,83 +3981,13 @@ export default function App() {
             </div>
           )}
 
-        {/* COFRINHOS — v0.3.34 (DEC-0035/RN032). Fase 2 (DEC-0038): primeira
-            organism a adotar os atoms novos (Card/Badge/ProgressBar/
-            Button/GhostButton/IconButton), como prova de conceito antes do
-            rollout amplo da Fase 4. */}
+        {/* COFRINHOS — v0.3.34 (DEC-0035/RN032). Extraído para organism
+            próprio na Fase 4 (DEC-0038). */}
         {tab==="cofrinhos"&&(
-          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <Card>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                <div>
-                  <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>🐷 Cofrinhos</div>
-                  <div style={{ fontSize:13, color:C.soft }}>
-                    Objetivos de poupança com ledger próprio de aportes/retiradas — não é a mesma coisa que Metas (limite de gasto por categoria) e não movimenta o saldo das suas contas.
-                  </div>
-                </div>
-                <Button onClick={()=>{ setForm({ dataAlvo:addMonthsToDate(todayIso(),6) }); setModal("addCofrinho"); }}>+ Novo cofrinho</Button>
-              </div>
-            </Card>
-
-            {cofrinhos.length===0 ? (
-              <Card>
-                <div style={{ fontSize:13, color:C.soft, textAlign:"center", padding:"20px 0" }}>Nenhum cofrinho ainda. Crie o primeiro para simular o aporte mensal necessário até a data-alvo.</div>
-              </Card>
-            ) : (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))", gap:14 }}>
-                {cofrinhos.map(cof=>{
-                  const sim = simularAporteMensal(cof, selMonth);
-                  const pct = cof.valorAlvo>0 ? Math.min(sim.saldoAtual/cof.valorAlvo,1) : 0;
-                  const statusInfo = {
-                    concluido:{ label:"✅ Concluído", color:C.emerald },
-                    atrasado:{ label:"⚠ Atrasado", color:C.coral },
-                    em_dia:{ label:"Em dia", color:C.gold },
-                  }[sim.status];
-                  return (
-                    <Card key={cof.id}>
-                      <ProgressStat
-                        title={cof.nome}
-                        subtitle={`Alvo: ${fmtDate(cof.dataAlvo)}`}
-                        badgeLabel={statusInfo.label}
-                        badgeColor={statusInfo.color}
-                        valueLabel={<div style={{ display:"flex", alignItems:"baseline", gap:6 }}><span style={{ fontSize:20, fontWeight:800, color:C.text }}>{fmtBRL(sim.saldoAtual)}</span><span style={{ fontSize:12, color:C.soft }}>/ {fmtBRL(cof.valorAlvo)}</span></div>}
-                        pct={pct}
-                        barColor={statusInfo.color}
-                        caption={`${(pct*100).toFixed(0)}% do alvo`}
-                      />
-
-                      {sim.status!=="concluido" && (
-                        <div style={{ background:C.navy, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 11px", marginBottom:10, fontSize:12 }}>
-                          <div>Aporte sugerido/mês: <strong style={{ color:C.text }}>{fmtBRL(sim.aporteSugerido)}</strong></div>
-                          <div style={{ color:C.soft, marginTop:2 }}>No ritmo sugerido, atinge em {formatMonthBR(sim.projecaoMes)}.</div>
-                        </div>
-                      )}
-
-                      <div style={{ display:"flex", gap:8, marginBottom:cof.aportes.length?10:0 }}>
-                        <Button bg={C.emerald} style={{ flex:1, padding:"7px 10px", fontSize:12 }} onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"aporte", data:todayIso() }); setModal("movimentoCofrinho"); }}>+ Aporte</Button>
-                        <Button bg={C.coral} style={{ flex:1, padding:"7px 10px", fontSize:12 }} disabled={sim.saldoAtual<=0} onClick={()=>{ setForm({ cofrinhoId:cof.id, tipoMovimento:"retirada", data:todayIso() }); setModal("movimentoCofrinho"); }}>− Retirada</Button>
-                        <GhostButton style={{ padding:"7px 10px" }} title="Excluir cofrinho" onClick={()=>{ if(window.confirm(`Excluir o cofrinho "${cof.nome}"? O histórico de aportes será perdido.`)) excluirCofrinho(cof.id); }}>🗑</GhostButton>
-                      </div>
-
-                      {cof.aportes.length>0 && (
-                        <div style={{ display:"flex", flexDirection:"column", gap:5, maxHeight:120, overflowY:"auto" }}>
-                          {[...cof.aportes].sort((a,b)=>b.data.localeCompare(a.data)).map(mv=>(
-                            <div key={mv.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11, color:C.soft }}>
-                              <span>{fmtDate(mv.data)} — {mv.tipo==="retirada"?"Retirada":"Aporte"}</span>
-                              <span style={{ display:"flex", alignItems:"center", gap:6 }}>
-                                <strong style={{ color:mv.tipo==="retirada"?C.coral:C.emerald }}>{mv.tipo==="retirada"?"−":"+"}{fmtBRL(mv.valor)}</strong>
-                                <IconButton style={{ fontSize:12 }} onClick={()=>excluirMovimentoCofrinho(cof.id, mv.id)}>×</IconButton>
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <CofrinhosTab
+            cofrinhos={cofrinhos} selMonth={selMonth} setForm={setForm} setModal={setModal}
+            excluirCofrinho={excluirCofrinho} excluirMovimentoCofrinho={excluirMovimentoCofrinho}
+          />
         )}
 
         {/* PESSOAS */}
@@ -4541,37 +4202,14 @@ export default function App() {
         )}
 
         {/* SIMULAÇÕES */}
-        {tab==="simulacoes"&&(            <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-              <div style={card()}>
-                <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>Nova Simulação</div>
-                <div style={{ fontSize:13, color:C.soft, marginBottom:14 }}>Simule uma compra sem afetar os lançamentos reais.</div>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))", gap:9 }}>
-                  <div><div style={lbl}>Cartão</div><select style={inputStyle("simCartaoId")} value={simForm.cartaoId||""} onChange={e=>setSimForm(f=>({...f,cartaoId:e.target.value}))}><option value="">Sel.</option>{cards.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
-                  <div><div style={lbl}>Descrição</div><input style={inputStyle("simDescricao")} placeholder="Ex: MacBook" value={simForm.descricao||""} onChange={e=>setSimForm(f=>({...f,descricao:e.target.value}))}/></div>
-                  <div><div style={lbl}>Categoria</div><CategorySelect cats={cats} value={simForm.catId} onChange={v=>setSimForm(f=>({...f,catId:v}))} validationInfo={requiredModal} fieldKey="simCatId"/></div>
-                  <div><div style={lbl}>Modo</div><select style={inp} value={simForm.modoParc} onChange={e=>setSimForm(f=>({...f,modoParc:e.target.value}))}><option value="total">Valor total</option><option value="parcela">Vlr parcela</option></select></div>
-                  <div><div style={lbl}>Valor (R$)</div><MoneyInput style={inputStyle("simValor")} value={simForm.valor||""} onChange={value=>setSimForm(f=>({...f,valor:value}))}/></div>
-                  <div><div style={lbl}>Parcelas</div><input style={inp} type="number" min={1} max={48} value={simForm.parcelas ?? ""} onChange={e=>setSimForm(f=>({...f,parcelas:e.target.value}))}/></div>
-                  <div><div style={lbl}>Data 1ª</div><DateInput style={inputStyle("simData")} value={simForm.data||""} onChange={value=>setSimForm(f=>({...f,data:value}))}/></div>
-                  <div><div style={lbl}>Competência 1ª fatura (opcional)</div><input style={inp} type="month" value={simForm.faturaCompetencia||""} onChange={e=>setSimForm(f=>({...f,faturaCompetencia:e.target.value}))}/><div style={{ fontSize:10, color:C.soft, marginTop:3 }}>{simForm.data&&simForm.cartaoId?`Automática: ${resolveCardCompetencia(simForm.data, simForm.cartaoId)}`:"Calculada pelo fechamento se vazio."}</div></div>
-                </div>
-                <div style={{ marginTop:11 }}><button onClick={addSim} style={btn(C.gold,{ color:C.navy })}>＋ Adicionar</button></div>
-              </div>
-              {sims.length>0&&<div style={card()}><div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Simulações salvas</div>{sims.map(s=>{ const c=cards.find(c=>c.id===s.cartaoId); const n=normalizeSimulationInstallments(s.parcelas); const vp=getSimulationInstallmentValue(s); return (<div key={s.id} style={{ display:"flex", alignItems:"center", gap:9, background:C.navy, borderRadius:9, padding:"9px 13px", marginBottom:7, borderLeft:`3px solid ${C.gold}` }}><div style={{ flex:1 }}><div style={{ fontWeight:700 }}>{s.descricao}</div><div style={{ fontSize:12, color:C.soft }}>{c?.nome} · impacto em {n} parcela{n>1?"s":""} · {n}× de {fmtBRL(vp)} · 1ª compra em {fmtDate(s.data)} · 1ª fatura {s.faturaCompetencia || resolveCardCompetencia(s.data, s.cartaoId)}{s.recalculatedAt?` · refeita em ${fmtDate(s.recalculatedAt.slice(0,10))}`:""}</div></div><span style={{ fontSize:10, background:getCatColor(s.catId)+"22", color:getCatColor(s.catId), padding:"2px 7px", borderRadius:20 }}>{getCatIcon(s.catId)} {getCatLabel(s.catId)}</span><button onClick={()=>refazerSim(s.id)} style={{ background:C.gold+"22", border:`1px solid ${C.gold}44`, borderRadius:5, color:C.gold, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Refazer</button><button onClick={()=>delSim(s.id)} style={{ background:C.coral+"22", border:`1px solid ${C.coral}44`, borderRadius:5, color:C.coral, padding:"3px 8px", cursor:"pointer", fontSize:12 }}>Excluir</button></div>); })}</div>}
-              {sims.length>0&&cards.map(c=>{ const sc=sims.filter(s=>s.cartaoId===c.id); if(!sc.length) return null; return (
-                <div key={c.id} style={card()}>
-                  <div style={{ fontWeight:700, fontSize:13, marginBottom:12 }}>{c.nome} — Impacto por competência de fatura</div>
-                  <div style={{ overflowX:"auto" }}>
-                    <table style={{ width:"100%", fontSize:12, borderCollapse:"collapse", minWidth:520 }}>
-                      <thead><tr style={{ background:C.border }}>{["Mês","Real","+ Sim","Total","Restante","Status"].map((h,i)=><th key={h} style={{ padding:"7px 11px", textAlign:i>0?"right":"left", color:C.soft, fontSize:10 }}>{h}</th>)}</tr></thead>
-                      <tbody>{Array.from(new Map(simTrans.filter(t=>t.cartaoId===c.id).sort((a,b)=>transMonthKey(a).localeCompare(transMonthKey(b))).map(t=>[transMonthKey(t),{ key:transMonthKey(t), label:`${MONTHS[parseInt(transMonthKey(t).slice(5,7),10)-1]} ${transMonthKey(t).slice(0,4)}` }])).values()).map(mo=>{ const real=calcularFaturaCartao(c, mo.key).total; const sv=simTrans.filter(t=>t.cartaoId===c.id&&transMonthKey(t)===mo.key).reduce((s,t)=>s+t.valor,0); const tot=real+sv; const rest=c.limite-tot; const pct=tot/c.limite; const status=pct>1?"🔴 Excede":pct>params.alertaLimite/100?"🟡 Atenção":"🟢 OK"; return (<tr key={mo.key} style={{ borderTop:`1px solid ${C.border}`, background:pct>1?C.coral+"11":pct>params.alertaLimite/100?C.gold+"0D":"transparent" }}><td style={{ padding:"8px 11px", fontWeight:600 }}>{mo.label}</td><td style={{ padding:"8px 11px", textAlign:"right", color:C.soft }}>{real>0?fmtBRL(real):"—"}</td><td style={{ padding:"8px 11px", textAlign:"right", color:sv>0?C.gold:C.soft, fontWeight:sv>0?700:400 }}>{sv>0?"+"+fmtBRL(sv):"—"}</td><td style={{ padding:"8px 11px", textAlign:"right", fontWeight:700 }}>{tot>0?fmtBRL(tot):"—"}</td><td style={{ padding:"8px 11px", textAlign:"right", color:rest<0?C.coral:rest<c.limite*0.15?C.gold:C.emerald, fontWeight:700 }}>{fmtBRL(rest)}</td><td style={{ padding:"8px 11px", textAlign:"right", fontSize:11 }}>{tot>0?status:"—"}</td></tr>); })}</tbody>
-                    </table>
-                  </div>
-                </div>
-              );})}
-              {sims.length===0&&<div style={{ ...card(), textAlign:"center", padding:"44px 24px", color:C.soft }}><div style={{ fontSize:30, marginBottom:9 }}>🔬</div><div style={{ fontWeight:700, fontSize:14, marginBottom:5 }}>Nenhuma simulação ativa</div></div>}
-            </div>
-          )}
+        {tab==="simulacoes"&&(
+          <SimulacoesTab
+            cats={cats} cards={cards} params={params} sims={sims} simTrans={simTrans}
+            simForm={simForm} setSimForm={setSimForm} requiredModal={requiredModal} inputStyle={inputStyle} inp={inp}
+            addSim={addSim} refazerSim={refazerSim} delSim={delSim} resolveCardCompetencia={resolveCardCompetencia} calcularFaturaCartao={calcularFaturaCartao}
+            getCatColor={getCatColor} getCatIcon={getCatIcon} getCatLabel={getCatLabel}
+          />
+        )}
 
         {/* IMPORTAÇÃO */}
         {tab==="importacao"&&(
