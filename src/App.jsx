@@ -37,6 +37,7 @@ import { LancamentosTab } from "./components/organisms/LancamentosTab.jsx";
 import { CartoesTab } from "./components/organisms/CartoesTab.jsx";
 import { RecorrenciasTab } from "./components/organisms/RecorrenciasTab.jsx";
 import { ContasTab } from "./components/organisms/ContasTab.jsx";
+import { MetasTab } from "./components/organisms/MetasTab.jsx";
 // v0.3.35 — DEC-0036: pdfjs-dist só é usado em extractPdfTextFromFile
 // (atrás de impMode==="vale"). Import dinâmico evita empurrar ~2,2MB de
 // worker para o chunk principal, que é carregado em toda navegação.
@@ -1400,29 +1401,8 @@ function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDes
 }
 
 // ── MetaInput: inline editable limit field ───────────────────────────────────
-function MetaInput({ catId, metas, setMetas, compact=false }) {
-  const [editing, setEditing] = useState(false);
-  const [buf, setBuf] = useState("");
-  const val = metas[catId]||0;
-  if (editing) {
-    return (
-      <MoneyInput autoFocus value={buf}
-        style={{ width:compact?80:100, background:"#0F1E36", border:"1px solid #00A878", borderRadius:6, color:"#E8EDF4", padding:"3px 7px", fontSize:13, outline:"none" }}
-        onChange={setBuf}
-        onBlur={()=>{ setMetas(p=>({...p,[catId]:moneyToNumber(buf)||0})); setEditing(false); }}
-        onKeyDown={e=>{ if(e.key==="Enter"){ setMetas(p=>({...p,[catId]:moneyToNumber(buf)||0})); setEditing(false); } if(e.key==="Escape") setEditing(false); }}
-      />
-    );
-  }
-  return (
-    <span onClick={()=>{ setBuf(val?val.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}):""); setEditing(true); }}
-      style={{ minWidth:compact?70:90, display:"inline-block", textAlign:"right", cursor:"pointer", fontWeight:700, fontSize:compact?13:14,
-               color:val>0?"#E8EDF4":"#4A6380", background:val>0?"#1E3050":"transparent",
-               border:"1px solid #1E3050", borderRadius:6, padding:"3px 8px" }}>
-      {val>0?val.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}):"Definir"}
-    </span>
-  );
-}
+// v0.3.37 — Fase 4 (DEC-0038): MetaInput extraído para
+// components/molecules/MetaInput.jsx.
 
 function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, reassignAndDeleteCard, reassignAndDeleteAccount, recategorizeWholeCat, reassignReasonMsg, onExport, onImport, onReset }) {
   const [section, setSection] = useState("cats");
@@ -3603,102 +3583,9 @@ export default function App() {
         )}
 
         {/* METAS */}
-        {tab==="metas"&&(            <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-              <div style={card()}>
-                <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>🎯 Metas Mensais por Categoria</div>
-                <div style={{ fontSize:13, color:C.soft, marginBottom:4 }}>
-                  Define um limite de gasto mensal por categoria. Considera gastos de <strong style={{ color:C.text }}>conta corrente e vales</strong> (não inclui cartão de crédito).
-                </div>
-                <div style={{ fontSize:12, color:C.gold, background:C.gold+"11", padding:"7px 11px", borderRadius:7, marginBottom:0 }}>
-                  💡 Para editar, clique no valor de limite de qualquer categoria e pressione Enter para salvar.
-                </div>
-              </div>
-
-              {/* Categorias com meta definida */}
-              {rootCats.some(c=>metas[c.id]>0)&&(
-                <div style={card()}>
-                  <div style={{ fontWeight:700, fontSize:14, marginBottom:14, display:"flex", alignItems:"center", gap:8 }}>
-                    Metas configuradas
-                    <span style={{ fontSize:12, fontWeight:400, color:C.soft }}>— {MONTHS[selMon-1]} {selYear}</span>
-                  </div>
-                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                    {rootCats.filter(c=>metas[c.id]>0).map(cat=>{
-                      const gasto  = gastoCatMes[cat.nome]||0;
-                      const limite = metas[cat.id]||0;
-                      const pct    = limite>0?Math.min(gasto/limite,1):0;
-                      const over   = gasto>limite;
-                      const warn   = !over && pct>=0.8;
-                      const barCol = over?C.coral:warn?C.gold:cat.cor||C.emerald;
-                      return (
-                        <div key={cat.id}>
-                          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5 }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                              <span style={{ fontSize:16 }}>{cat.icon}</span>
-                              <span style={{ fontWeight:600 }}>{cat.nome}</span>
-                              {over&&<span style={{ fontSize:10, background:C.coral+"22", color:C.coral, padding:"2px 7px", borderRadius:20, fontWeight:700 }}>⚠ Acima do limite</span>}
-                              {warn&&<span style={{ fontSize:10, background:C.gold+"22", color:C.gold, padding:"2px 7px", borderRadius:20, fontWeight:700 }}>⚡ Atenção</span>}
-                            </div>
-                            <div style={{ display:"flex", alignItems:"center", gap:10, fontSize:13 }}>
-                              <span style={{ color:over?C.coral:C.text, fontWeight:700 }}>{fmtBRL(gasto)}</span>
-                              <span style={{ color:C.soft }}>/</span>
-                              <MetaInput catId={cat.id} metas={metas} setMetas={setMetas}/>
-                            </div>
-                          </div>
-                          <div style={{ background:C.border, borderRadius:4, height:8, overflow:"hidden" }}>
-                            <div style={{ height:8, borderRadius:4, width:`${Math.min(100,pct*100)}%`, background:barCol, transition:"width .3s" }}/>
-                          </div>
-                          <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginTop:3, color:C.soft }}>
-                            <span>{(pct*100).toFixed(0)}% utilizado</span>
-                            <span>{over?`Excedido em ${fmtBRL(gasto-limite)}`:`Restam ${fmtBRL(limite-gasto)}`}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Todas as categorias para configurar */}
-              <div style={card()}>
-                <div style={{ fontWeight:700, fontSize:14, marginBottom:14 }}>Configurar limites</div>
-                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:10 }}>
-                  {rootCats.map(cat=>{
-                    const gasto  = gastoCatMes[cat.nome]||0;
-                    const limite = metas[cat.id]||0;
-                    const over   = limite>0 && gasto>limite;
-                    return (
-                      <div key={cat.id} style={{ display:"flex", alignItems:"center", gap:10, background:C.navy, borderRadius:9, padding:"10px 13px", border:`1px solid ${over?C.coral+"55":C.border}` }}>
-                        <span style={{ fontSize:20, flexShrink:0 }}>{cat.icon}</span>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontWeight:600, fontSize:13, marginBottom:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{cat.nome}</div>
-                          <div style={{ fontSize:11, color:C.soft }}>Gasto: <span style={{ color:over?C.coral:C.text, fontWeight:600 }}>{fmtBRL(gasto)}</span></div>
-                        </div>
-                        <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
-                          <span style={{ fontSize:11, color:C.soft }}>Limite:</span>
-                          <MetaInput catId={cat.id} metas={metas} setMetas={setMetas} compact/>
-                          {limite>0&&<button onClick={()=>setMetas(p=>{const n={...p};delete n[cat.id];return n;})} style={{ background:"transparent", border:"none", color:C.muted, cursor:"pointer", fontSize:14, padding:"0 2px" }}>×</button>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Resumo: categorias sem meta e total comprometido */}
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-                <div style={card()}>
-                  <div style={lbl}>Total com meta configurada</div>
-                  <div style={{ fontSize:20, fontWeight:800, color:C.emerald }}>{fmtBRL(rootCats.filter(c=>metas[c.id]>0).reduce((s,c)=>s+(metas[c.id]||0),0))}</div>
-                  <div style={{ fontSize:12, color:C.soft, marginTop:4 }}>limite total do mês</div>
-                </div>
-                <div style={card()}>
-                  <div style={lbl}>Total gasto (corrente + vales)</div>
-                  <div style={{ fontSize:20, fontWeight:800, color:C.gold }}>{fmtBRL(Object.values(gastoCatMes).reduce((s,v)=>s+v,0))}</div>
-                  <div style={{ fontSize:12, color:C.soft, marginTop:4 }}>em {MONTHS[selMon-1]}</div>
-                </div>
-              </div>
-            </div>
-          )}
+        {tab==="metas"&&(
+          <MetasTab rootCats={rootCats} metas={metas} setMetas={setMetas} gastoCatMes={gastoCatMes} selMon={selMon} selYear={selYear} />
+        )}
 
         {/* COFRINHOS — v0.3.34 (DEC-0035/RN032). Extraído para organism
             próprio na Fase 4 (DEC-0038). */}
