@@ -1245,6 +1245,73 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.38 — Fase 0] - 2026-08-18
+
+Fase 0 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`): higiene
+técnica, sem entrega funcional. **A versão exibida no app continua `v0.3.37.0`** —
+esta entrada registra mudança de ferramental e remoção de código morto, não uma
+versão nova.
+
+### Adicionado
+
+- `eslint.config.js` (flat config, ESLint 9) com `no-undef`, `react`,
+  `react-hooks` (só `rules-of-hooks` e `exhaustive-deps`) e `react-refresh`.
+  Fecha a dívida aberta na Fase 5 da v0.3.37, quando `catColor is not defined`
+  passou por `npm test` e `npm run build` sem ser detectado.
+- `vite.config.js` aplicando `@vitejs/plugin-react`. O plugin estava declarado em
+  `package.json` desde o início e nunca havia sido ligado: **o React Fast Refresh
+  nunca tinha rodado neste projeto.**
+- Scripts `npm run lint` e `npm run lint:fix`.
+- Dependências de lint: `eslint`, `@eslint/js`, `globals`, `eslint-plugin-react`,
+  `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`.
+
+### Alterado
+
+- Comentário explicativo nos seis `catch {}` de LocalStorage, `crypto.randomUUID` e
+  notificação de erro de persistência — o silêncio é deliberado e agora está escrito.
+- `[^\d,.\-]` para `[^\d,.-]` em `importService.js` (escape desnecessário, mesma
+  semântica).
+
+### Corrigido
+
+- Nada. **A regra `no-undef` não encontrou nenhuma ocorrência no código atual**: o
+  defeito que originou a dívida já havia sido corrigido à mão na v0.3.37. O ganho da
+  fase é preventivo.
+
+### Removido
+
+Código morto, confirmado por análise estática e por `git log`:
+
+- `src/App.jsx`: 15 imports não usados, o `useMemo` `nm`, o `useCallback`
+  `saldoContaFinal` (e o `movimentoContaMes` que só ele consumia) e um `dt`
+  sobrevivente da correção de clamp de dia.
+- `src/services/cardInvoiceService.js`: cópias privadas e mortas de
+  `getSimulationInstallmentValue` e `safeMoneyAmount`, duplicando
+  `simulationService.js`.
+- `src/services/reassignmentService.js`: `transMonthKey` local, duplicando
+  `saldoService.js`.
+- `src/services/cardInvoiceOperations.js`: `now` calculado e descartado em
+  `addInvoiceAdjustment` — **o lançamento de ajuste de fatura nasce sem carimbo de
+  data de criação**, insumo direto para a Fase 1.
+- `src/components/organisms/ParamsTab.jsx`: estado `importMsg` e o `div` que o
+  exibia. `setImportMsg` **nunca foi chamado desde a versão inicial do projeto**
+  (confirmado por `git log -S`): a mensagem de resultado da importação de backup
+  nunca apareceu para o usuário. Reinstalar esse feedback é feature nova, agora no
+  backlog aberto.
+- `src/components/organisms/PessoasTab.jsx`: props `big` e `card`, nunca usadas.
+
+### Migração
+
+- Não aplicável. Nenhuma chave, prefixo ou estrutura persistida foi tocada.
+
+### Testes
+
+- 193 testes passando (15 arquivos), build limpo, `npm run lint` com 0 erros e 8
+  warnings (todos `react-refresh/only-export-components`, registrados no backlog).
+- **Fast Refresh verificado no navegador:** com a aba Pessoas aberta, editar
+  `PessoasTab.jsx` produziu `[vite] hot updated` sem recarga, preservando o estado
+  do React e uma marca gravada em `window`.
+
 ## [0.3.37.0] - 2026-08-16
 
 Bloco "v0.3.37 — Modularização estrutural (Atomic Design do front-end)" de

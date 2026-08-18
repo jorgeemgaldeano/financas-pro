@@ -58,7 +58,7 @@ export const pSignedVal = (value, dc = "") => {
 
   const cleaned = raw
     .replace(/^\((.*)\)$/, "$1")
-    .replace(/[^\d,.\-]/g, "")
+    .replace(/[^\d,.-]/g, "")
     .replace(/-$/, "-");
 
   let parsed = moneyToNumber(cleaned);

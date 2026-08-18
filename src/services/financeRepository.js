@@ -116,7 +116,7 @@ export const localFinanceRepository = {
         const value = localStorage.getItem(fullKey);
         if (value !== null) result[fullKey] = value;
       });
-    } catch {}
+    } catch { /* LocalStorage indisponivel: devolve o que conseguiu ler */ }
     return result;
   },
 

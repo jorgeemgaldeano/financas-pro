@@ -16,12 +16,12 @@ export function onPersistError(handler) {
 function notifyPersistError(key) {
   try {
     if (persistErrorHandler) persistErrorHandler({ key });
-  } catch {}
+  } catch { /* handler do app falhou: nao pode derrubar a gravacao */ }
   try {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("fpro:persist-error", { detail: { key } }));
     }
-  } catch {}
+  } catch { /* CustomEvent indisponivel (ambiente sem window): erro ja foi notificado acima */ }
 }
 
 export function lsGet(key, fallback = null) {

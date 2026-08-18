@@ -231,7 +231,7 @@ function formatMoneyBR(value) {
   return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function findExistingFutureInstallmentFallback(row = {}, info, { existingIndexes, cartaoId } = {}) {
+function findExistingFutureInstallmentFallback(row = {}, info, { existingIndexes } = {}) {
   const competencia = getCompetenceMonth(row);
   const descricaoBase = row.descricaoBaseParcelamento || getCardInstallmentBaseDescription(row);
   const valorParcela = getCardInstallmentAmount(row);

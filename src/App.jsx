@@ -1,38 +1,28 @@
-import { Fragment, useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { RequiredFieldModal, requiredFieldInfo, highlightIfRequired } from "./components/ui/RequiredFieldModal.jsx";
-import { DateInput } from "./components/ui/DateInput.jsx";
-import { ConfirmDialog } from "./components/ui/ConfirmDialog.jsx";
 import { useToasts, ToastHost } from "./components/ui/Toast.jsx";
 import { moveCardTransactions, moveAccountTransactions, recategorizeCategory } from "./services/reassignmentService.js";
 import { createTransfer, deleteTransfer, isTransfer } from "./services/transferService.js";
 import { addMovimentoCofrinho, createCofrinho, deleteCofrinho, removeMovimentoCofrinho } from "./services/cofrinhoService.js";
 import { createSaldoInicialResolver, transMonthKey, valorRealizado } from "./services/saldoService.js";
 import { findTransferMatchCandidates, linkImportedRowAsTransfer, revertTransferLinksFromBatch } from "./services/transferMatchService.js";
-import { EMPTY_TRANSACTION_FILTERS, TransactionFiltersPanel, filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
+import { filterTransactions } from "./components/finance/TransactionFiltersPanel.jsx";
 import { guessCategoryForTransaction, normText } from "./services/categoryService.js";
 import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
 import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
 import { fmtBRL, moneyToNumber } from "./utils/moneyUtils.js";
-import { addMonthsToDate, addMonthsToMonthKey, dateForMonthDay, fmtDate, formatMonthBR, mKey, MONTHS, monthCompare, monthOffset, todayIso, todayMonthKey } from "./utils/dateUtils.js";
-import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosed, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
+import { addMonthsToDate, dateForMonthDay, fmtDate, formatMonthBR, mKey, MONTHS, monthCompare, monthOffset, todayMonthKey } from "./utils/dateUtils.js";
+import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
 import { closeInvoice, reopenInvoice, addInvoiceAdjustment, computeCardInvoice, resolveInvoiceCategoryId } from "./services/cardInvoiceOperations.js";
 import { buildProjectionInsights, buildRealCashFlowProjection } from "./services/projectionService.js";
-import { CashFlowChart } from "./components/charts/CashFlowChart.jsx";
-import { BarChart } from "./components/charts/BarChart.jsx";
-import { DonutChart } from "./components/charts/DonutChart.jsx";
-import { CardInstallmentDivergencePanel } from "./components/finance/CardInstallmentDivergencePanel.jsx";
 import { applyCardInstallmentSequenceCorrection, buildCardInstallmentGroupId, getCardInstallmentCorrectionPreview } from "./services/cardInstallmentService.js";
 import { buildCardImportDuplicateSet, CARD_CREDIT_TYPES, isCardCreditDiscardedOnImport, isCardCreditRowBlocked, prepareCardImportRows, resolveCardCreditCompetencia, revalidateSelectedCardImportRows, splitCardRowsForExpansion } from "./services/cardImportService.js";
-import { getOrphanDividas } from "./utils/dividaUtils.js";
 import { catColor, catIcon, catLabel, collectCatAndDescendantIds, findCat, findRootCat, flattenCats } from "./utils/categoryTreeUtils.js";
 import { C } from "./theme/tokens.js";
-import { MoneyInput } from "./components/atoms/MoneyInput.jsx";
-import { FormField } from "./components/molecules/FormField.jsx";
-import { ModalFooter } from "./components/molecules/ModalFooter.jsx";
 import { CategorySelect } from "./components/molecules/CategorySelect.jsx";
-import { safeMoneyAmount, normalizeSimulationInstallments, getSimulationInstallmentValue, expandSim } from "./services/simulationService.js";
+import { safeMoneyAmount, normalizeSimulationInstallments, expandSim } from "./services/simulationService.js";
 import { SimulacoesTab } from "./components/organisms/SimulacoesTab.jsx";
 import { CofrinhosTab } from "./components/organisms/CofrinhosTab.jsx";
 import { LancamentosTab } from "./components/organisms/LancamentosTab.jsx";
@@ -74,7 +64,7 @@ function clearFinancasProStorage() {
     Object.keys(localStorage)
       .filter(key => key.startsWith("fpro_"))
       .forEach(key => localStorage.removeItem(key));
-  } catch {}
+  } catch { /* LocalStorage indisponivel (modo privativo/cota): limpeza best-effort */ }
 }
 
 function getFinancasProStorageSnapshot() {
@@ -85,7 +75,7 @@ function getFinancasProStorageSnapshot() {
       const value = localStorage.getItem(storageKey);
       if (value !== null) snapshot[storageKey] = value;
     });
-  } catch {}
+  } catch { /* LocalStorage indisponivel: devolve o snapshot parcial em vez de quebrar o backup */ }
   return snapshot;
 }
 
@@ -179,7 +169,7 @@ const uid = () => {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return crypto.randomUUID();
     }
-  } catch {}
+  } catch { /* crypto.randomUUID indisponivel: cai no gerador de fallback abaixo */ }
   return "id_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 11);
 };
 
@@ -336,7 +326,6 @@ export default function App() {
     () => createSaldoInicialResolver(trans, saldosIniciais, baseSaldoMonth),
     [trans, saldosIniciais, baseSaldoMonth]
   );
-  const movimentoContaMes = saldoResolver.movimentoContaMes;
   const getSaldoInicialConta = saldoResolver.getSaldoInicialConta;
 
   const setSaldoInicialContaMes = useCallback((contaId, monthKey, value) => {
@@ -366,9 +355,6 @@ export default function App() {
 
   const saldoInicialTotal = useMemo(()=>contas.reduce((s,c)=>s+getSaldoInicialConta(c, selMonth),0),[contas,getSaldoInicialConta,selMonth]);
   const saldoFinal = saldoInicialTotal + receitas - despCorrTotal;
-  const saldo = saldoFinal;
-
-  const saldoContaFinal = useCallback((ct)=>getSaldoInicialConta(ct, selMonth) + movimentoContaMes(ct, selMonth),[getSaldoInicialConta,movimentoContaMes,selMonth]);
 
   const faturasDoMes = useMemo(() => cards.map(c => ({ ...c, ...calcularFaturaCartao(c, selMonth) })), [cards, calcularFaturaCartao, selMonth]);
   const despCart = useMemo(()=>faturasDoMes.reduce((s,c)=>s+c.total,0),[faturasDoMes]);
@@ -577,7 +563,6 @@ export default function App() {
       const [startY, startM] = selMonth.split("-").map(Number);
       const novosLancamentos = Array.from({length:meses},(_,i)=>{
         // Garante que o dia existe no mês (ex: dia 31 em fev → último dia)
-        const dt = new Date(startY, startM-1+i, dia);
         // Se dia não existe no mês, JS avança automaticamente (ex: 31/fev→3/mar) — corrigi com clamp
         const maxDay = new Date(startY, startM+i, 0).getDate();
         const safeDay = Math.min(dia, maxDay);
@@ -1612,16 +1597,6 @@ export default function App() {
       });
     return map;
   }, [monthTrans, cats]);
-
-  const nm = useMemo(() => {
-    return Array.from({ length: 6 }, (_, i) => {
-      const dt = new Date(selYear, selMon - 1 + i, 1);
-      return {
-        key: dt.toISOString().slice(0, 7),
-        label: `${MONTHS[dt.getMonth()]}/${dt.getFullYear()}`
-      };
-    });
-  }, [selYear, selMon]);
 
   const contasDisponiveis = useMemo(() => contas, [contas]);
   const isCartao = form.origemTipo === "cartao";

@@ -18,7 +18,6 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
   const [renameForm, setRenameForm] = useState({});
   const [expanded, setExpanded] = useState({});
   const [editCardId, setEditCardId] = useState(null);
-  const [importMsg, setImportMsg] = useState("");
   const [autoRuleForm, setAutoRuleForm] = useState({ tipo:"despesa", catId:"", keywords:"" });
   // v0.3.32 — diálogos de reatribuição/recategorização e confirmação simples.
   // { kind:"card"|"account", id, count, target, error } | null
@@ -424,7 +423,6 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
                   ⬆ Importar backup
                   <input type="file" accept=".json" style={{ display:"none" }} onChange={onImport}/>
                 </label>
-                {importMsg&&<div style={{ fontSize:12, marginTop:8, color:importMsg.startsWith("✅")?C.emerald:C.coral }}>{importMsg}</div>}
               </div>
 
               <div style={{ background:C.coral+"11", border:`1px solid ${C.coral}44`, borderRadius:10, padding:"13px 15px" }}>

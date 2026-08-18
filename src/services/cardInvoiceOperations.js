@@ -279,7 +279,6 @@ export function addInvoiceAdjustment(state, opts) {
   const { trans = [], faturas = [], cards = [] } = state;
   const { cardId, monthKey, tipoAjuste } = opts;
   const uid = opts.uid || fallbackUid;
-  const now = opts.now || nowIso();
   const catId = opts.catId || "cat10";
   const day = Number(opts.day) || 1;
   const todayKey = opts.todayKey;

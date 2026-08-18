@@ -13,7 +13,7 @@ import { MoneyInput } from "../atoms/MoneyInput.jsx";
 import { CategorySelect } from "../molecules/CategorySelect.jsx";
 export function PessoasTab({ pessoas, setPessoas, dividas, setDividas, despPess, setDespPess,
                       cards, cats, getCatColor, getCatIcon, getCatLabel,
-                      fmtBRL, fmtDate, lbl, big, card, btn, inp, ghost, C, uid, selMonth }) {
+                      fmtBRL, fmtDate, lbl, btn, inp, ghost, C, uid, selMonth }) {
   const [view,        setView]       = useState("lista");      // lista | pessoa
   const [selPId,      setSelPId]     = useState(null);
   const [showNovaPes, setShowNovaPes]= useState(false);

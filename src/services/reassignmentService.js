@@ -26,9 +26,6 @@ import {
   CLOSED_INVOICE_STATUSES,
 } from "./cardInvoiceService.js";
 
-const transMonthKey = (t) =>
-  t.competencia || t.competenceMonth || (t.data || "").slice(0, 7);
-
 const toIdSet = (ids) => (ids instanceof Set ? ids : new Set(Array.isArray(ids) ? ids : [ids]));
 
 // Uma linha de cartão é candidata a mover se é compra/ajuste do cartão de

@@ -108,6 +108,23 @@ Ao mexer em fatura, parcelamento, saldo mensal, projeção, despesa compartilhad
 
 ---
 
+## Qualidade estática (ESLint)
+
+- `npm run lint` (e `npm run lint:fix`) rodam ESLint 9 em flat config
+  (`eslint.config.js`). Adotado na Fase 0 da v0.3.38 porque `npm test` e
+  `npm run build` **não pegam `ReferenceError`**: a extração de `ParamsTab` na
+  v0.3.37 quebrou em runtime com `catColor is not defined` e passou pelos dois.
+- Rodar o lint faz parte de fechar uma tarefa, junto com `npm test` e `npm run build`.
+- Estado atual: **0 erros**. Os warnings existentes são todos
+  `react-refresh/only-export-components` e estão registrados no backlog.
+- `vite.config.js` liga o `@vitejs/plugin-react`. Sem ele o Fast Refresh não
+  funciona e toda edição recarrega a página — foi assim até 2026-08-18. Se voltar
+  a haver `ReferenceError` fantasma em aba antiga, checar antes de tudo se este
+  arquivo continua existindo e com o plugin aplicado.
+- `vitest.config.js` continua separado e **não** carrega o `vite.config.js`.
+
+---
+
 ## Convenção de documentação
 
 - Documentos numerados sequencialmente (`01-...`, `02-...`, ... já na casa dos 35+).

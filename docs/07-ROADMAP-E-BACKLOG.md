@@ -1221,16 +1221,75 @@ itens revogou.
 - O nome do projeto no Vercel é definitivo na prática (T1): renomear muda a URL, e
   origem nova é LocalStorage vazio.
 
-#### Fase 0 — Higiene técnica (risco baixo, independente de tudo)
+#### Fase 0 — Higiene técnica (risco baixo, independente de tudo) — ENTREGUE 2026-08-18
 
-- [ ] Adotar ESLint com `no-undef` — dívida aberta pela Fase 5 da v0.3.37, quando a
+- [x] Adotar ESLint com `no-undef` — dívida aberta pela Fase 5 da v0.3.37, quando a
   extração de `ParamsTab` quebrou em runtime com `catColor is not defined` sem que
   `npm test` ou `npm run build` acusassem.
-- [ ] Criar `vite.config.js` ligando `@vitejs/plugin-react`. O plugin está declarado
+- [x] Criar `vite.config.js` ligando `@vitejs/plugin-react`. O plugin está declarado
   em `package.json` e nunca foi aplicado (só existe `vitest.config.js`): **o React
   Fast Refresh nunca rodou neste projeto.** Provável causa raiz dos `ReferenceError`
   fantasmas em aba antiga, tratados como "staleness de HMR" em várias sessões.
 - Aceite: lint sem erro no `src/`; editar um componente preserva o estado da tela.
+
+##### Resultado da Fase 0
+
+Configuração: `eslint.config.js` (flat config, ESLint 9), `vite.config.js` com
+`@vitejs/plugin-react`, e os scripts `npm run lint` / `npm run lint:fix`. Estado
+final: **0 erros e 8 warnings** no `src/`, 193 testes passando, build limpo.
+
+**Fast Refresh verificado no navegador**, não só no papel: com a aba Pessoas aberta,
+editar `PessoasTab.jsx` produziu `[vite] hot updated` sem recarga de página, o estado
+do React foi preservado (a aba continuou selecionada) e uma marca gravada em `window`
+sobreviveu à edição — prova de que não houve reload. Antes desta fase, qualquer edição
+recarregava a página inteira.
+
+**A regra `no-undef` não encontrou nenhuma ocorrência no código atual.** O defeito que
+originou a dívida (`catColor is not defined`) já tinha sido corrigido à mão na v0.3.37;
+o valor da regra aqui é preventivo, não corretivo. Registrar isso importa para não
+atribuir à Fase 0 um ganho que ela não teve.
+
+Os 42 erros encontrados eram de outra natureza e foram corrigidos:
+
+- 31 de `no-unused-vars`, quase todos código morto: 15 imports não usados no `App.jsx`,
+  o `useMemo` `nm` (lista de 6 meses) e o `useCallback` `saldoContaFinal`, ambos sem
+  nenhum consumidor, mais um `dt` sobrevivente da correção de clamp de dia.
+- 6 de `no-empty`: os `catch {}` de LocalStorage, `crypto.randomUUID` e notificação de
+  erro. São silêncios deliberados; ganharam comentário explicando o porquê, em vez de a
+  regra ser desligada.
+- 4 de `react/no-unescaped-entities` e 1 de `no-useless-escape`.
+
+**Três achados colaterais, que não são regressão desta fase:**
+
+1. `setImportMsg` nunca foi chamado — desde a versão inicial do projeto, confirmado por
+   `git log -S`. A mensagem de resultado da importação de backup na aba Parâmetros
+   **nunca apareceu para o usuário**: o estado existia, o `div` existia, e nada nunca
+   escrevia nele. Estado e `div` removidos. Se o feedback de importação for desejado,
+   é item novo de backlog, não conserto.
+2. `addInvoiceAdjustment` (`cardInvoiceOperations.js`) calculava `now` e descartava: o
+   lançamento de ajuste de fatura nasce **sem nenhum carimbo de data de criação**.
+   Insumo direto para a Fase 1, que precisa de `updatedAt` universal.
+3. `cardInvoiceService.js` tinha cópia privada e morta de `getSimulationInstallmentValue`
+   e `safeMoneyAmount`, duplicando `simulationService.js` — drift silencioso entre dois
+   services. As cópias mortas foram removidas.
+
+**Regras deliberadamente afrouxadas, com o motivo, para não parecerem descuido:**
+
+- `eslint-plugin-react-hooks` v7 entra apenas com `rules-of-hooks` e `exhaustive-deps`.
+  O preset `recommended` da v7 traz o conjunto do React Compiler (`immutability`,
+  `purity`, `use-memo`, `set-state-in-effect` e mais), que é outro trabalho, de outro
+  tamanho, e não cabe numa fase de higiene.
+- `react/no-unescaped-entities` proíbe só `>` e `}`. Aspas duplas em texto de tela são
+  inofensivas e o app é escrito em português.
+- `no-unused-vars` com `ignoreRestSiblings: true`, porque `const { a, ...resto } = obj`
+  é o idioma de omissão de propriedade usado em `transferMatchService.js` — os nomes
+  descartados ali são a intenção, não código morto.
+
+**Os 8 warnings que ficaram** são todos `react-refresh/only-export-components`, em
+`Label.jsx`, `TransactionFiltersPanel.jsx`, `AppShell.jsx`, `RequiredFieldModal.jsx` e
+`Toast.jsx`: arquivos que exportam componente e não-componente juntos, e por isso ainda
+caem para recarga completa quando editados. Separar os exports é refatoração, não
+higiene — fica como backlog aberto, e não bloqueia a Fase 1.
 
 #### Fase 1 — `usuario` e `updatedAt` (risco médio)
 
@@ -1297,6 +1356,15 @@ itens revogou.
 
 ### Backlog aberto (sem versão agendada, baixa prioridade)
 
+- [ ] Feedback visual do resultado da importação de backup na aba Parâmetros. O
+  estado existia desde a versão inicial e nunca foi preenchido (achado da Fase 0
+  da v0.3.38); o código morto foi removido. É feature nova, não conserto.
+- [ ] Separar exports de não-componentes em `Label.jsx`, `TransactionFiltersPanel.jsx`,
+  `AppShell.jsx`, `RequiredFieldModal.jsx` e `Toast.jsx` para que o Fast Refresh
+  valha também nesses arquivos (8 warnings de `react-refresh/only-export-components`).
+- [ ] Avaliar a adoção do conjunto do React Compiler no `eslint-plugin-react-hooks` v7
+  (`immutability`, `purity`, `use-memo`, `set-state-in-effect`), fora do escopo da
+  Fase 0 por tamanho.
 - [ ] Exportação CSV além de TXT para despesas de cartão.
 - [ ] Relatório por pessoa em formato exportável.
 - [ ] Gráficos de evolução por pessoa e de impacto de simulações.
