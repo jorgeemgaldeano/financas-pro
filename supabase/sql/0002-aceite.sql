@@ -20,8 +20,21 @@ select * from public.contas_autorizadas;
 
 -- ---------------------------------------------------------------------
 -- BLOCO 1 - anon nao ve nada
--- Esperado: 0 linhas nas duas consultas. Este e o bloco que justifica a
--- anon key poder viajar no bundle.
+--
+-- Esperado: ERRO 42501 "permission denied for table estado" nas duas
+-- consultas - e NAO "0 linhas". O revoke all do 0001 tira do anon o
+-- privilegio de tabela por completo, e o Postgres checa privilegio de
+-- tabela ANTES de avaliar qualquer policy de RLS. Sem privilegio
+-- nenhum, a policy nunca chega a rodar: e recusa na porta, mais forte
+-- que "filtrado e vazio". Este e o bloco que justifica a anon key
+-- poder viajar no bundle.
+--
+-- Se o SQL Editor mostrar o HINT "GRANT SELECT ON public.estado TO
+-- anon", IGNORE-O. E o aviso generico que o Postgres anexa a todo
+-- 42501, sem saber que a ausencia de privilegio aqui e intencional.
+-- Segui-lo destrancaria a tabela para qualquer pessoa que lesse a
+-- anon key no bundle - exatamente o que este bloco existe para provar
+-- que nao acontece.
 -- ---------------------------------------------------------------------
 set role anon;
 select * from public.estado;
