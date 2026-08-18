@@ -2268,3 +2268,59 @@ migração, sem mudança de prefixo. É a diferença mais concreta em relação 
 construir tombstone e achatamento sobre uma base com dados reais — mais caro que fazer agora sobre base
 vazia. O carimbo `updatedAt` da Fase 1 existe justamente para que essa migração continue possível sem
 perda de informação.
+
+## DEC-0040 — `package.json` como fonte única de versão
+
+Data: 2026-08-18
+
+### Contexto
+
+O `package.json` estava em `"version": "0.1.0"` desde a criação do projeto, enquanto a versão real do
+aplicativo vivia em `APP_VERSION`, uma constante literal no `src/App.jsx` (`"0.3.37.0"`). Os dois números
+nunca foram sincronizados. Nenhum processo lia o `package.json`, então o valor errado não causava defeito
+visível — mas todo relatório, changelog ou tooling que consultasse o `package.json` leria a versão errada,
+e a divergência crescia a cada release.
+
+Era pendência aberta desde 2026-08-18, formulada assim: o `package.json` vira fonte única de versão ou é
+oficialmente ignorado?
+
+### Decisão
+
+**O `package.json` passa a ser a fonte única.** A constante literal no `App.jsx` foi substituída por
+`__APP_VERSION__`, injetado em tempo de build pelo `define` do Vite a partir do `package.json`. Subir
+versão passa a ser uma edição em um lugar só.
+
+O mesmo `define` foi repetido no `vitest.config.js`, porque o Vitest não carrega o `vite.config.js`: sem
+isso, o primeiro teste que importasse o `App.jsx` quebraria com `__APP_VERSION__ is not defined`. O
+`eslint.config.js` declara `__APP_VERSION__` como global de leitura, senão o `no-undef` adotado na Fase 0
+acusaria a variável injetada.
+
+### Raciocínio
+
+A alternativa era manter os dois números e sincronizá-los à mão a cada release. Foi descartada: sincronia
+manual entre duas fontes é exatamente o que produziu a divergência de `0.1.0` contra `0.3.37.0` ao longo
+de todo o projeto. Repetir o mecanismo esperando um resultado diferente não é decisão, é hábito.
+
+A direção do fluxo (`package.json` → código, e não o contrário) foi escolhida porque o `package.json` é
+lido por ferramenta externa e o `App.jsx` não. Um arquivo `.js` de constante exportada resolveria o lado
+do código, mas deixaria o `package.json` errado, que é justamente o lado que outras ferramentas enxergam.
+
+### O que mudou
+
+- `package.json`: `"version"` de `0.1.0` para `0.3.37.0`, alinhado ao que o app já exibia.
+- `vite.config.js` e `vitest.config.js`: `define` de `__APP_VERSION__` lido do `package.json`.
+- `src/App.jsx`: `const APP_VERSION = __APP_VERSION__;`.
+- `eslint.config.js`: `__APP_VERSION__` como global `readonly`.
+
+Nada muda para o usuário: o app continua exibindo `v0.3.37.0`. Verificado no bundle de produção.
+
+### Reversibilidade
+
+**Total e barata.** Reverter é voltar o literal para o `App.jsx` e apagar os dois `define`. Nenhum dado
+persistido depende disto.
+
+### Cuidado herdado
+
+O `"name"` do `package.json` continua `financas-pro-localhost`, resquício da fase em que o app só rodava
+em `localhost`. Com o deploy da Fase A o nome fica enganoso, mas renomear pacote é assunto separado e não
+foi tocado aqui.

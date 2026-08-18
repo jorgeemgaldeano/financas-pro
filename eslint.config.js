@@ -26,7 +26,8 @@ export default [
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
-      globals: globals.browser,
+      // __APP_VERSION__ e injetado pelo define do Vite/Vitest (DEC-0040).
+      globals: { ...globals.browser, __APP_VERSION__: "readonly" },
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     settings: { react: { version: "detect" } },

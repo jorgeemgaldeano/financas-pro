@@ -56,7 +56,8 @@ function loadPdfjs() {
   return pdfjsLibPromise;
 }
 
-const APP_VERSION = "0.3.37.0";
+// Fonte unica de versao: package.json, injetado pelo define do Vite (DEC-0040).
+const APP_VERSION = __APP_VERSION__;
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function clearFinancasProStorage() {

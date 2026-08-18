@@ -1267,6 +1267,11 @@ versão nova.
 
 ### Alterado
 
+- **`package.json` passa a ser a fonte única de versão (`DEC-0040`)**: estava em
+  `0.1.0` desde o início do projeto, contra `0.3.37.0` no `App.jsx`. Agora vale
+  `0.3.37.0` e é injetado como `__APP_VERSION__` pelo `define` do Vite (repetido
+  no `vitest.config.js`, que não carrega o `vite.config.js`). O app continua
+  exibindo `v0.3.37.0`; conferido no bundle de produção.
 - Comentário explicativo nos seis `catch {}` de LocalStorage, `crypto.randomUUID` e
   notificação de erro de persistência — o silêncio é deliberado e agora está escrito.
 - `[^\d,.\-]` para `[^\d,.-]` em `importService.js` (escape desnecessário, mesma
