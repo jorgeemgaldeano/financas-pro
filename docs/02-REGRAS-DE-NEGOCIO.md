@@ -192,6 +192,15 @@ O sistema deve permitir exportar backup dos dados.
 - Backup deve conter todos os dados necessários para restauração.
 - Backup não deve depender de conexão com internet.
 
+### Alteração 2026-08-18 — v0.3.38 (`DEC-0037`, trava T2)
+
+O critério "backup não deve depender de conexão com internet" passa a valer com uma distinção explícita, agora que o app é publicado no Vercel **sem PWA**. O texto original era ambíguo e podia ser lido como garantia de abertura offline, que deixa de existir.
+
+- **Gerar backup continua sem depender de rede.** Com o app carregado, a exportação lê o LocalStorage e grava o arquivo localmente, sem nenhuma chamada externa.
+- **Carregar o app publicado depende de rede.** Sem service worker, o cold start pela URL pública exige conexão. Consequência aceita na decisão T2.
+- Executar o app localmente (`npm run dev`) continua funcionando sem rede.
+- Se um dia o PWA for adotado, este bloco é revogado e o critério original volta a valer sem ressalva.
+
 ## RN018 — Restauração
 
 O sistema deve permitir restaurar dados de backup.
@@ -499,3 +508,43 @@ Cofrinho é um objetivo de poupança com valor-alvo e data-alvo, com ledger pró
   - Caso contrário, status **"Em dia"**, com o aporte mensal calculado normalmente.
 - Cofrinho arquivado (`arquivado:true`) sai das listagens ativas mas mantém o histórico de aportes — exclusão lógica (RN020), não exclusão física.
 - Entra em `BACKUP_STORAGE_KEYS`, backup/restauração e é lido com default seguro `[]` para backups antigos sem essa chave (RN002/RN017/RN018) — sem bump de `LS_VERSION`.
+
+---
+
+## RN033 — Exclusão lógica universal (tombstone) — REVOGADA
+
+**Revogada em 2026-08-18 pela `DEC-0039`, antes de qualquer implementação.** O número fica reservado e não deve ser reaproveitado, para não quebrar referências.
+
+Esta regra exigia que toda exclusão de registro passasse a ser lógica (marcação `excluidoEm`), com expurgo aos 90 dias. Ela existia por um motivo único: no desenho de merge contínuo por registro (`DEC-0037`, adendo de 2026-08-16), o motor compara apenas dois lados e não consegue distinguir "foi apagado de propósito" de "ainda não existia" — o tombstone supria essa ausência de informação.
+
+O desenho adotado (`DEC-0039`) reconcilia com **três** referências: o estado local, o do servidor e o ancestral comum recuperado do servidor no momento da recusa. Com o ancestral, a exclusão é dedutível pela ausência, e o tombstone deixa de ter função.
+
+Fica registrado, porque continua verdadeiro e independe do desenho de sincronização: **o LocalStorage tem teto de aproximadamente 5 MB por origem, e estourar esse teto é escrita que falha em silêncio** — o que a `RN002` e o `CLAUDE.md` do projeto proíbem. Qualquer estrutura que cresça monotonicamente precisa ser monitorada.
+
+A exclusão física de lançamentos permanece permitida, como sempre foi: a `RN020` trata de preferir inativação quando a exclusão **impacta histórico** (contas, cartões, categorias) e admite explicitamente que lançamentos "podem ser cancelados ou removidos conforme regra definida".
+
+---
+
+## RN034 — Sincronização multi-dispositivo e resolução de conflito
+
+O aplicativo sincroniza os dados entre dispositivos por um BaaS (Supabase), mantendo o LocalStorage como fonte de verdade local. A unidade de sincronização é o **payload inteiro**, no mesmo formato de `normalizeBackupPayload()`/`BACKUP_STORAGE_KEYS`. Ver `DEC-0037` (forma e stack) e `DEC-0039` (mecânica adotada).
+
+### Critérios
+
+- **Local-first.** O LocalStorage continua primário; o servidor é réplica. Falha de rede nunca pode impedir o uso do app nem a gravação local.
+- **Falha de sincronização é sempre visível.** Sincronização que falha em silêncio é violação direta da invariante de persistência do projeto.
+- **Sobrescrita cega é proibida.** Substituir o payload do servidor pelo mais recente sem verificar o que mudou no meio foi avaliado e rejeitado em `DEC-0037`: perde o trabalho do outro sem aviso.
+- **Trava otimista.** Todo envio carrega a versão que o cliente carregou. O servidor aceita e incrementa a versão, ou **recusa**. A recusa nunca descarta o trabalho local: dispara backup e abre a reconciliação.
+- **Reconciliação por merge de três vias**, comparando estado local, estado do servidor e **ancestral comum** (a versão que o cliente havia carregado, recuperada do servidor):
+  - registro alterado só de um lado é aplicado automaticamente, sem perguntar;
+  - registro presente no ancestral e ausente de um lado foi apagado de propósito;
+  - registro alterado dos dois lados é apresentado ao usuário para escolha, mostrando `updatedAt` e `usuario`;
+  - registros aninhados com id próprio (`dividas[].amortizacoes`, `cofrinhos[].aportes`, `cats[].subs`, `params.autoCategoryRules`) seguem a mesma lógica, de forma recursiva.
+- **Backup automático antes de aplicar o resultado de um merge.** Nenhuma reconciliação é aplicada sem que exista uma cópia do estado anterior.
+- **Degradação definida:** se o ancestral não puder ser recuperado, a reconciliação volta ao comportamento de recusa com backup e resolução manual. Degrada, não quebra.
+- **Carimbo `updatedAt` em toda escrita de registro**, em todas as entidades. É insumo do merge e do histórico, e não pode ser retrofitado.
+- **Atribuição por `usuario`**, campo de texto no LocalStorage. Como a conta do BaaS é compartilhada, esse campo é a única atribuição existente: **a sincronização fica bloqueada enquanto ele não estiver preenchido.**
+- **Momento do sync:** ao abrir o app, ao sair e por botão manual. Sync contínuo está fora de escopo — cada envio sobe o payload inteiro.
+- **A chave pública (`anon key`) pode ir no bundle; a senha da conta não.** A segurança mora na RLS. Login automático com senha embutida no código daria acesso total a qualquer pessoa que lesse o bundle — proibido, inclusive via variável de ambiente do provedor de hospedagem.
+- **"Apagar dados financeiros" propaga** para os dispositivos, com backup automático baixado antes da execução e confirmação por digitação. `window.confirm` deixa de ser confirmação suficiente para essa ação.
+- **Sem mudança de formato de dado:** a adoção da sincronização é aditiva, sem bump de `LS_VERSION` e sem migração.

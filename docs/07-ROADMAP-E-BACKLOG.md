@@ -1078,8 +1078,9 @@ raciocínio do sequenciamento por fase.
 
 **Extração de serviços (escopo original, 2026-07-08):**
 
-- [ ] Extrair `simulationService.js` (cálculo de simulações hoje dentro
-  de `App.jsx`).
+- [x] Extrair `simulationService.js` (cálculo de simulações hoje dentro
+  de `App.jsx`). **Entregue na Fase 3 da v0.3.37**, com 11 testes novos —
+  o checkbox ficou desmarcado por engano até 2026-08-18.
 - [ ] Extrair `peopleSharedService.js` (regras de despesas compartilhadas
   e dívidas de `PessoasTab`).
 - [ ] Criar `backupService.js` dedicado, saindo do `App.jsx` — só depois
@@ -1179,37 +1180,120 @@ uma testável/validável isoladamente antes de seguir para a próxima:**
 
 ### v0.3.38 — Sincronização multi-dispositivo (casal em notebooks separados)
 
-Iniciativa nova, decidida em 2026-08-16 (`DEC-0037`), sequenciada **depois
-da v0.3.35** — não encaixada num dos blocos já planejados porque é uma
-mudança de arquitetura, não uma feature de negócio. Análise de impacto
-completa (estratégia de merge, escolha de provedor, o que muda em
-RN017/RN018) fica para quando chegar a vez; esta entrada só registra a
-decisão de perseguir e a forma que NÃO pode tomar.
+**Bloco reescrito em 2026-08-18 pela `DEC-0039`**, que trocou o desenho de merge
+contínuo por registro (12 fases) por sincronização de payload com trava otimista e
+merge assistido de três vias (6 blocos). O desenho anterior segue descrito no adendo
+de 2026-08-16 da `DEC-0037` e permanece como **alternativa avaliada e não adotada** —
+é o caminho para o dia em que o uso deixar de ser "mesma casa, quase sempre online".
 
-**Motivação real (não especulativa):** o app é usado por um casal, cada um
-no seu notebook — sem sincronização hoje, cada notebook tem seu próprio
-LocalStorage isolado.
+**Motivação real:** o app é usado por um casal, cada um no seu notebook — sem
+sincronização, cada LocalStorage é uma ilha. O dado vive no navegador de cada
+máquina, então servir o app por rede local **não** resolve (compartilha o código, não
+o dado).
 
-**Decisão de forma (`DEC-0037`) — vale desde já para qualquer análise futura:**
+**Stack:** Supabase (uma linha: `estado(payload jsonb, versao, updatedAt, usuario)`)
++ Vercel.
 
-- [ ] **Não é "backend" no sentido pesado.** Nada de API própria + auth
-  própria + servidor para operar. Um BaaS (Firebase/Supabase ou
-  equivalente) para guardar o payload por usuário/casal já resolve a parte
-  de armazenamento e autenticação.
-- [ ] **Não pode ser "sobrescreve com o mais novo" por arquivo inteiro.**
-  Essa forma foi avaliada e REJEITADA nesta sessão: se os dois editam
-  offline no mesmo período, o último a sincronizar apaga silenciosamente o
-  trabalho do outro — viola a invariante do próprio `CLAUDE.md`
-  ("persistência que falha não pode falhar em silêncio").
-- [ ] **Precisa ser merge por id de registro + timestamp**, não por
-  timestamp do arquivo: os arrays (`trans`, `contas`, `cards`, ...) já têm
-  `id` por item — mesclar mantendo o mais recente por registro e unindo os
-  que só existem de um lado.
-- [ ] Reaproveitar a estrutura de payload já validada em
-  `normalizeBackupPayload()`/`BACKUP_STORAGE_KEYS` como base do formato
-  sincronizado — mas a rotina de restauração hoje é "substituir tudo"
-  (RN018), não "mesclar"; isso precisa virar uma lógica nova, não uma
-  reaproveitada.
+#### Como funciona, em uma passada
+
+Ao salvar, o cliente envia o payload inteiro mais a **versão que carregou**. O
+servidor aceita e incrementa, ou **recusa** porque alguém salvou no meio. Recusa
+nunca descarta nada: dispara backup e abre a reconciliação. Na reconciliação o
+cliente busca do servidor a versão que havia carregado — o ancestral comum — e faz
+merge de três vias por id: aplica sozinho o que só um lado mudou, deduz exclusão pela
+ausência em relação ao ancestral (**sem tombstone**) e pergunta só sobre o que os dois
+mudaram.
+
+#### O que NÃO é preciso fazer neste desenho
+
+Registrado explicitamente para não voltar por inércia do plano anterior: **sem
+tombstone, sem expurgo de 90 dias, sem achatamento de registros aninhados, sem bump
+de `LS_VERSION`, sem migração de formato.** Ver `DEC-0039` para o que cada um desses
+itens revogou.
+
+#### Ordem operacional
+
+- **A Fase A (deploy) é a última, colada ao cutover.** Publicar antes de existir
+  sincronização move o uso para uma origem sem os dados e sem o benefício que
+  justificaria a mudança.
+- O histórico financeiro atual será **descartado** (decisão de 2026-08-18): a base
+  nova nasce com contas, saldos iniciais e recorrências. Sem migração, sem semeadura.
+- O nome do projeto no Vercel é definitivo na prática (T1): renomear muda a URL, e
+  origem nova é LocalStorage vazio.
+
+#### Fase 0 — Higiene técnica (risco baixo, independente de tudo)
+
+- [ ] Adotar ESLint com `no-undef` — dívida aberta pela Fase 5 da v0.3.37, quando a
+  extração de `ParamsTab` quebrou em runtime com `catColor is not defined` sem que
+  `npm test` ou `npm run build` acusassem.
+- [ ] Criar `vite.config.js` ligando `@vitejs/plugin-react`. O plugin está declarado
+  em `package.json` e nunca foi aplicado (só existe `vitest.config.js`): **o React
+  Fast Refresh nunca rodou neste projeto.** Provável causa raiz dos `ReferenceError`
+  fantasmas em aba antiga, tratados como "staleness de HMR" em várias sessões.
+- Aceite: lint sem erro no `src/`; editar um componente preserva o estado da tela.
+
+#### Fase 1 — `usuario` e `updatedAt` (risco médio)
+
+- [ ] Campo de texto `usuario` no LocalStorage (D7). Como a conta do Supabase é
+  compartilhada, é a **única** atribuição existente — sincronização bloqueada
+  enquanto estiver vazio.
+- [ ] Carimbo `updatedAt` em toda escrita de registro, em todas as entidades. Hoje
+  existe em três pontos do `App.jsx` e em dois services.
+- [ ] **Puramente aditivo: sem bump de `LS_VERSION`.**
+- Aceite: teste que cria e edita cada entidade verificando o carimbo.
+- Nota: `updatedAt` é o único item que **não pode ser retrofitado** — é ele que
+  mantém aberta a porta para o desenho C, caso um dia seja necessário.
+
+#### Fase 2 — Infra Supabase (risco baixo, não toca o app)
+
+- [ ] Tabela de uma linha: `estado(payload jsonb, versao, updatedAt, usuario)`, com
+  RLS e retenção das últimas versões (o ancestral do merge sai daqui).
+- [ ] Conta compartilhada (D7); `anon key` no bundle e **senha fora do repositório e
+  fora das variáveis de ambiente do Vercel** (D8). Login manual — senha embutida no
+  código daria acesso total a quem lesse o bundle.
+- Aceite: insert e select manuais pelo painel respeitando a RLS.
+
+#### Fase 3 — Trava otimista (risco médio)
+
+- [ ] Enviar payload mais versão esperada; servidor aceita e incrementa, ou recusa.
+- [ ] Na recusa: aviso claro, backup baixado, nada descartado.
+- [ ] Falha de rede nunca impede o uso local nem a gravação local, e nunca é
+  silenciosa.
+- **Ao fim desta fase já existe sincronização utilizável e sem perda silenciosa.** O
+  merge da Fase 4 é conforto, não correção — se o projeto parar aqui, o resultado
+  ainda é melhor que hoje.
+- Aceite: dois navegadores convergem; o segundo a salvar é recusado com mensagem
+  compreensível e sai com backup na mão.
+
+#### Fase 4 — Merge assistido de três vias (RISCO ALTO — o coração do projeto)
+
+- [ ] Buscar do servidor a versão carregada (ancestral) no momento da recusa.
+- [ ] Auto-resolver o que só um lado mudou; deduzir exclusão pela ausência em relação
+  ao ancestral; apresentar para escolha só o que os dois mudaram, mostrando
+  `updatedAt` e `usuario`.
+- [ ] Tratar aninhados (`dividas[].amortizacoes`, `cofrinhos[].aportes`,
+  `cats[].subs`, `params.autoCategoryRules`) pela mesma lógica, recursiva.
+- [ ] Backup automático **antes** de aplicar o resultado.
+- [ ] Se o ancestral não for recuperável, degradar para o comportamento da Fase 3.
+- [ ] **Teste antes do código**, com os cenários: alterado só de um lado; alterado dos
+  dois; apagado de um e editado do outro; aninhado alterado em filhos diferentes;
+  ancestral indisponível.
+- Aceite: nenhum cenário da bateria perde dado sem o usuário ter escolhido.
+
+#### Fase 5 — Orquestração (risco médio)
+
+- [ ] Sync ao abrir, ao sair e por botão manual (D6).
+- [ ] **"Apagar dados financeiros" passa a propagar** (T4): backup automático baixado
+  antes e confirmação por digitação no lugar do `window.confirm`.
+- Aceite: os dois dispositivos convergem em uso normal de um dia.
+
+#### Fase A — Deploy e cutover (risco baixo)
+
+- [ ] Publicar em `*.vercel.app` (T1), **sem PWA** (T2) — `RN017` já alterada para
+  separar "gerar backup não exige rede" de "carregar o app publicado exige".
+- [ ] Cutover: os dois abrem a URL, um cadastra contas, saldos iniciais e
+  recorrências, o sync é ligado.
+- Aceite: os dois notebooks operando na mesma base pela URL pública.
 
 ### Backlog aberto (sem versão agendada, baixa prioridade)
 

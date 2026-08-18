@@ -1874,6 +1874,129 @@ Nenhum nesta sessão. A análise futura provavelmente vai propor mudança em
 `RN018` (restauração hoje é "substituir tudo") para acomodar merge — a
 decidir formalmente quando essa análise for feita.
 
+### Adendo (2026-08-16) — desenho fechado: Supabase + Vercel, em 11 decisões
+
+A decisão acima fixou a **forma** (BaaS em vez de backend próprio, merge por id em vez de sobrescrita de
+arquivo) e deixou o desenho em aberto. Este adendo o fecha: provedor, schema, mecânica de conflito e
+sequenciamento.
+
+**Stack escolhida:** Supabase (banco) + Vercel (front).
+
+#### O que a leitura do código mudou no desenho
+
+Três achados na camada de persistência, nenhum previsto por esta decisão:
+
+1. **A exclusão é física.** `App.jsx:609` é `delTrans=(id)=>setTrans(p=>p.filter(t=>t.id!==id))`, e o
+   padrão se repete em outros handlers. Merge por união de registros **ressuscita** o que foi apagado,
+   porque o lado que apagou não tem como afirmar que foi de propósito.
+2. **O `updatedAt` usado como critério de desempate quase não existe.** É gravado em três pontos do
+   `App.jsx` e em `cardInstallmentService`/`cardInvoiceOperations`. A maioria das entidades não tem carimbo.
+3. **Vários registros têm arrays com id dentro deles** (`dividas[].amortizacoes`, `cofrinhos[].aportes`,
+   `params.autoCategoryRules`, `cats[].subs`). Merge no nível do pai perde edição concorrente em filhos
+   diferentes, sem sinalizar conflito.
+
+Nenhum é bloqueio, mas os três viram trabalho **antes** da primeira linha de rede — daí a separação das
+fases 1-5 (fundação local) das fases 6-9 (sincronização).
+
+#### As 11 decisões
+
+| # | Assunto | Escolha |
+|---|---|---|
+| D1 | Fonte de verdade | Local-first: LocalStorage primário, Supabase réplica |
+| D2 | Modelo no Postgres | Tabela genérica `registros(tipo, id, payload jsonb, ...)` |
+| D3 | Exclusão | Tombstone no próprio registro, filtrado na fronteira de leitura |
+| D4 | Timestamp de conflito | `updatedAt` gravado pelo cliente |
+| D5 | Conflito | Last-write-wins, mas visível e auditável |
+| D6 | Momento do sync | Híbrido: ao abrir, ao sair, mais botão manual |
+| D7 | Autenticação | Conta Supabase compartilhada + campo de texto `usuario` no LocalStorage |
+| D8 | Chave | `anon key` pública no bundle + RLS; senha nunca no repositório |
+| D9 | Dados existentes | Base começa limpa; o primeiro registro gravado é a base inicial |
+| D10 | Faseamento | Fundação local sem rede primeiro, sincronização depois |
+| D11 | Registros aninhados | Achatamento seletivo (`amortizacoes`, `aportes`); `params` e `cats` inteiros |
+
+Mais duas definições fora da numeração: expurgo aos **90 dias** no servidor; categorias e subcategorias
+semeadas na base zerada e preservadas no reset (**já é o comportamento de `handleReset`** — virou item de
+teste, não de construção).
+
+#### Raciocínio das escolhas menos óbvias
+
+**D2 — tabela genérica em vez de 13 tabelas.** O contra da genérica é perder validação e consulta analítica
+no servidor, e o app **não faz nenhuma consulta analítica no servidor**: `projectionService` e
+`saldoService` rodam no cliente sobre o array em memória. Seriam 13 migrations mantidas em sincronia com o
+formato local para sempre, pagas por uma garantia que ninguém usa.
+
+**D7 — conta compartilhada.** O único argumento a favor de duas contas + household era preservar o "quem
+editou" que o log de conflito precisa; um campo de texto entrega a mesma atribuição sem tela de convite e
+sem RLS elaborada. **Consequência dura:** como `auth.uid()` é o mesmo para os dois, esse campo é a única
+atribuição existente — a sincronização deve ficar bloqueada enquanto ele não estiver preenchido.
+
+**D8 — com uma regra inegociável.** A `anon key` é pública por design e pode ir no bundle; a segurança mora
+na RLS. O que não pode existir é login automático com a senha da conta compartilhada embutida no código:
+qualquer pessoa que abrisse a URL e lesse o bundle teria acesso total. Login manual, senha fora do
+repositório **e fora das variáveis de ambiente do Vercel**.
+
+**D9 — base limpa.** Elimina o passo de maior risco do projeto (mesclar duas bases divergentes por meses,
+sem metadado de tempo, com um motor recém-escrito) e permite que `updatedAt` e `excluidoEm` nasçam
+obrigatórios, sem código de migração. E se executa sozinha: sair de `localhost:5180` para uma URL do Vercel
+é origem nova, então o LocalStorage nasce vazio.
+
+### Adendo (2026-08-18) — as 6 travas resolvidas
+
+Seis pontos ficaram em aberto no desenho de 16/08 e impediam qualquer fase de começar. Todos decididos em
+2026-08-18, cada um com três alternativas avaliadas.
+
+| # | Trava | Decisão |
+|---|---|---|
+| T1 | Domínio | `*.vercel.app` **definitivo**, sem regra de travessia |
+| T2 | PWA | **Sem PWA**; `RN017` reescrita |
+| T3 | Expurgo local de tombstone | **Fase 9**, por confirmação do servidor, não por prazo cego |
+| T4 | "Apagar dados financeiros" | **Propaga** como exclusão lógica em massa, com backup automático antes e confirmação por digitação |
+| T5 | Auditoria de conflito | Versão perdedora **dentro do registro vencedor** (`versaoAnterior` no payload); sem tabela `conflitos` |
+| T6 | `LS_VERSION` | **Bump para 2 na Fase 1**; fases 1-4 tratadas como um formato único |
+
+T1 e T2 foram decididas contra a recomendação da análise, que preferia `*.vercel.app` com regra de
+travessia e PWA completo. Registrado para rastreabilidade, sem ressalva ulterior.
+
+#### Correção de duas afirmações da análise original
+
+- **A `RN020` não estava sendo descumprida.** A análise de 16/08 afirmava que a exclusão física violava a
+  `RN020`. A regra diz "deve-se preferir inativação ou exclusão lógica" quando a exclusão **impacta
+  histórico**, e seus critérios tratam de contas, cartões e categorias; sobre lançamento é explícita ao
+  admitir que "podem ser cancelados ou removidos conforme regra definida". A Fase 3 continua necessária,
+  mas por causa do merge — não para consertar uma regra violada.
+- **O custo de não ter PWA é menor do que a análise apresentou.** Com o app já carregado, gerar backup
+  continua sem depender de rede; o que passa a exigir conexão é o cold start. A reescrita da `RN017` é
+  essa separação, não a revogação da garantia inteira.
+
+#### Consequências
+
+- `RN017` reescrita (separa gerar backup de carregar o app). `RN033` e `RN034` criadas.
+- **Esta decisão afirmava que a sincronização "não deve exigir bump de `LS_VERSION`". T6 revoga isso:** o
+  prefixo passa a `fpro_v2_` na Fase 1.
+- O expurgo aos 90 dias passa a ter natureza única (tombstone no servidor); a auditoria deixa de ser tabela.
+- **Restrição operacional nova:** renomear o projeto no Vercel muda a URL e zera o LocalStorage. O nome
+  escolhido na Fase A é definitivo na prática.
+- **Exportar backup manual antes da Fase A e antes da Fase 1** — as duas zeram a base local por caminhos
+  diferentes (origem nova e prefixo novo) e nenhuma avisa.
+- A D1 (local-first) continua válida por dado e cálculo no cliente, mas perde o argumento offline que a
+  sustentava na redação original.
+
+#### Achado colateral
+
+`@vitejs/plugin-react` está declarado em `package.json` e **não está ligado em lugar nenhum**: existe
+`vitest.config.js` na raiz, mas **não existe `vite.config.js`**. O build funciona porque o esbuild do Vite
+transpila JSX sozinho, mas o plugin nunca é aplicado e **o React Fast Refresh nunca rodou neste projeto**.
+Candidato forte a causa raiz dos `ReferenceError` fantasmas em aba antiga, tratados como "staleness de HMR"
+em várias sessões. Correção de poucas linhas, absorvida pela Fase 0.
+
+#### Reversibilidade das seis
+
+- **T6 é a mais cara**: define o formato de todo registro. Reverter depois da Fase 4 significa refazer as
+  fases 1 a 4.
+- **T1 e T5 são médias**: T1 fica cara no dia em que a URL mudar; T5 vira migração de payload se a tabela
+  de conflitos for criada depois.
+- **T2, T3 e T4 são baratas**: são comportamento e configuração, não formato.
+
 ## DEC-0038 — Atomic Design do front-end absorvido na v0.3.37
 
 Data: 2026-08-16
@@ -2008,3 +2131,140 @@ registrada como `Fase 6 (candidata)` no roadmap, não aprovada.
 **Reversibilidade:** alta. Nenhuma extração da Fase 5 alterou
 comportamento, dado ou regra; cada uma foi um commit isolado, revertível
 sem efeito sobre as demais.
+
+## DEC-0039 — Sincronização por payload com trava otimista e merge assistido de três vias
+
+Data: 2026-08-18
+
+### Contexto
+
+A `DEC-0037` e seus dois adendos fecharam um desenho de sincronização baseado em **merge contínuo por
+registro**, em 12 fases. Antes de escrever a primeira linha, duas informações novas apareceram:
+
+1. **O cenário de uso foi caracterizado pela primeira vez.** Os dois dispositivos são usados quase sempre
+   na mesma casa e na mesma rede, ou seja, quase sempre online e com baixa chance de divergência
+   prolongada. Toda a análise anterior assumiu implicitamente o pior caso (edição offline longa dos dois
+   lados), sem que isso tivesse sido verificado.
+2. **O histórico financeiro atual será descartado** (decisão do usuário, 2026-08-18). Some a necessidade de
+   migração de dado antigo e o cutover deixa de ser o passo delicado que era.
+
+Com isso ficou visível que a análise da `DEC-0037` avaliou apenas dois pontos do espaço de soluções e
+pulou um terceiro, que fica entre eles.
+
+### As três regras possíveis de reconciliação
+
+| | Regra | O que acontece se os dois lados mudaram |
+|---|---|---|
+| A | Sobrescrita pelo mais novo | O último a salvar vence; o trabalho do outro some **sem aviso**. |
+| B | Trava otimista | O último a salvar é **recusado**; ele reconcilia e salva de novo. |
+| C | Merge contínuo por registro | Os dois são combinados registro a registro, com desempate por `updatedAt`. |
+
+A `DEC-0037` avaliou A e C, rejeitou A com razão (perda silenciosa, violação da invariante de persistência
+do projeto) e adotou C. **B nunca esteve na mesa.** A perda silenciosa que condenou A é resolvida pela
+trava, não exclusivamente pelo merge: a trava transforma perda silenciosa em recusa visível, que é o que a
+invariante exige.
+
+### Decisão
+
+**Adotado o desenho B, acrescido de merge assistido de três vias no momento da recusa.**
+
+- A unidade de sincronização é o **payload inteiro**, no mesmo formato já validado por
+  `normalizeBackupPayload()`/`BACKUP_STORAGE_KEYS`.
+- O servidor guarda **uma linha**: `estado(payload jsonb, versao, updatedAt, usuario)`.
+- Ao salvar, o cliente envia o payload e a **versão que carregou**. O servidor aceita e incrementa, ou
+  recusa. Recusa nunca descarta nada: dispara backup e abre o caminho de reconciliação.
+- Na recusa, o cliente recupera do servidor a **versão que havia carregado** (o ancestral comum) e faz um
+  merge de três vias por id de registro.
+
+### Por que o merge de três vias é mais simples e mais seguro que o merge contínuo
+
+O merge contínuo de C compara dois lados: o local e o do servidor. Sem saber como o registro estava antes,
+ele não distingue "eu apaguei" de "o outro criou" — **é exatamente por isso que C exige tombstone**, um
+marcador que existe só para suprir a ausência do ancestral.
+
+Com o ancestral disponível, a comparação passa a três vias e o problema muda de natureza:
+
+- registro alterado só de um lado → aplica esse lado, sem perguntar;
+- registro presente no ancestral e ausente de um lado → foi apagado de propósito, **dedutível sem tombstone**;
+- registro alterado dos dois lados → conflito real, apresentado ao usuário com `updatedAt` e `usuario`.
+
+Pelo mesmo motivo não é necessário achatar registros aninhados: `dividas[].amortizacoes`,
+`cofrinhos[].aportes`, `cats[].subs` e `params.autoCategoryRules` se resolvem pela mesma lógica recursiva.
+
+### O que esta decisão revoga da `DEC-0037`
+
+| Item | Situação |
+|---|---|
+| D3 — tombstone no registro | **REVOGADO.** O ancestral distingue apagado de inexistente. |
+| D11 — achatamento seletivo dos aninhados | **REVOGADO.** Não há merge no formato do servidor. |
+| T3 — expurgo de tombstone e regra dos 90 dias | **REVOGADO** junto com D3. |
+| T6 — bump de `LS_VERSION` para 2 na Fase 1 | **REVOGADO.** As mudanças passam a ser puramente aditivas. |
+| D2 — tabela genérica `registros` | **ALTERADO.** Vira uma linha única (`estado`). |
+| D5 — last-write-wins automático | **ALTERADO.** Vira recusa mais merge assistido: quem decide é o usuário, não o relógio. |
+| T5 — `versaoAnterior` dentro do registro vencedor | **ALTERADO.** Backup automático antes de aplicar o merge cobre a mesma necessidade melhor. |
+| D1, D4, D6, D7, D8, D9, D10, T1, T2, T4 | **MANTIDOS sem alteração.** |
+
+O desenho C continua descrito por inteiro no adendo de 2026-08-16 da `DEC-0037` e fica registrado como
+**alternativa avaliada e não adotada**, não como documentação morta: se o cenário de uso mudar para
+divergência prolongada entre dispositivos, ele é o caminho.
+
+### Alternativas avaliadas e descartadas
+
+- **Executar as 12 fases do desenho C assim mesmo.** Defensável: paga mais uma vez e nunca mais revisita o
+  assunto. Descartada por desproporção — metade da máquina (expurgo, regra dos 90 dias, achatamento,
+  auditoria de conflito) existe para servir divergência prolongada, que é a exceção no cenário real.
+- **B puro, sem merge e sem `updatedAt`.** Descartada: é o único caminho que fica caro de verdade depois.
+  `updatedAt` não pode ser retrofitado — não se inventa o horário em que um registro foi alterado no
+  passado. Carimbá-lo desde o primeiro dia custa pouco e preserva a opção de migrar para C.
+- **Servir o app por rede local** (`vite --host 0.0.0.0`, script `dev:network` já existente). **Inválida**,
+  registrada para não ser proposta de novo: servir por rede compartilha o código, não o dado. O
+  LocalStorage é do navegador de cada máquina, então o segundo dispositivo encontraria uma base vazia.
+
+### Consequências positivas
+
+- As três fases de maior risco do plano anterior (tombstones, achatamento, merge contínuo) viram **uma
+  só**, executada com o usuário presente e com mais informação do que C jamais teria.
+- Nenhuma mudança de formato de dado: sem bump de `LS_VERSION`, sem migração, sem quebra de prefixo.
+- Reaproveita a rotina de backup e restauração já validada em produção, em vez de contorná-la — a
+  `RN018` ("substituir tudo") deixa de ser obstáculo e passa a ser o motor.
+- Existe valor entregue antes do fim: ao término da Fase 3 já há sincronização utilizável e sem perda
+  silenciosa. O merge da Fase 4 é conforto, não correção.
+
+### Consequências negativas ou riscos
+
+- **Edição simultânea é recusada, não mesclada automaticamente.** A reconciliação exige o usuário presente.
+  Se o padrão de uso mudar para edição paralela frequente, isso incomoda.
+- **Todo salvamento sobe o payload inteiro** (algumas centenas de KB). Torna sync de alta frequência caro —
+  o que é aceitável sob a D6 (ao abrir, ao sair, botão manual), mas fecha a porta para sync contínuo.
+- **A Fase 4 continua sendo o código de maior risco do projeto**, ainda que menor que o de C. Exige teste
+  antes do código.
+- Não há auditoria de conflito por registro. Para dois usuários, o backup automático antes do merge cobre.
+
+### Decisões de implementação assumidas
+
+1. **O ancestral não é guardado no LocalStorage.** Uma segunda cópia do payload dobraria o consumo contra
+   um teto de aproximadamente 5 MB por origem. O servidor retém as últimas versões e o cliente busca a que
+   carregou **apenas quando a recusa acontece** — custo zero no caso normal.
+2. **Auto-resolução silenciosa quando só um lado mudou.** Perguntar sobre registro sem conflito real
+   transformaria o merge em interrogatório.
+3. **Se o ancestral não for recuperável** (versão já expurgada do servidor), o merge degrada para o
+   comportamento da Fase 3: recusa com backup e resolução manual. Degrada, não quebra.
+
+### Impacto em LocalStorage
+
+Aditivo apenas: campo `usuario` e carimbo `updatedAt` nos registros. **Sem bump de `LS_VERSION`**, sem
+migração, sem mudança de prefixo. É a diferença mais concreta em relação ao desenho anterior.
+
+### Impacto em regra de negócio
+
+- **`RN033` revogada antes de implementada** (era a exclusão lógica universal por tombstone).
+- **`RN034` reescrita** para a mecânica de payload, trava otimista e merge de três vias.
+- `RN017` mantém a alteração de 2026-08-18 (cold start exige rede, backup não).
+- `RN018` deixa de precisar de reescrita: "substituir tudo" continua correto e vira parte do motor.
+
+### Reversibilidade
+
+**Alta enquanto nada estiver implementado, média depois da Fase 3.** Migrar de B para C mais adiante exige
+construir tombstone e achatamento sobre uma base com dados reais — mais caro que fazer agora sobre base
+vazia. O carimbo `updatedAt` da Fase 1 existe justamente para que essa migração continue possível sem
+perda de informação.
