@@ -2498,9 +2498,57 @@ recusa com backup da Fase 3 (`DEC-0039`, decisão de implementação 3).
 
 ### Estado da fase
 
-**O script está escrito; nada foi executado.** O projeto Supabase é criado na conta do usuário, com senha
-que por decisão (D8) não passa por este repositório nem por variável de ambiente do Vercel. O aceite da
-Fase 2 é a execução do `0002-aceite.sql` no painel, não a existência do arquivo.
+**Executado em 2026-08-18.** O projeto Supabase foi criado na conta do usuário, com senha que por decisão
+(D8) não passou por este repositório nem por variável de ambiente do Vercel. O `0002-aceite.sql` rodou por
+completo no painel, com uma correção no meio do caminho (ver adendo abaixo).
+
+### Adendo (2026-08-18) — o falso alarme do Bloco 5 e a causa real
+
+A primeira rodada do aceite pareceu revelar uma falha grave: depois do Bloco 5 (que tenta apagar `estado`,
+forjar `estado_versoes` e se autoconceder acesso em `contas_autorizadas` — os três devem ser negados),
+apareceu uma linha nova em `contas_autorizadas` com um UUID aleatório e `descricao` vazia — a impressão
+digital exata do `insert into contas_autorizadas (user_id) values (gen_random_uuid())` do item 5c.
+
+**Não era o schema.** O `0002-aceite.sql` original assumia que `set role authenticated` do Bloco 3
+sobreviveria até o Bloco 5, rodado como um clique de "Run" separado no SQL Editor do Supabase. Não
+sobreviveu: a sessão voltou a ser `postgres` (dono das tabelas, que ignora RLS e privilégio por completo),
+e o insert de autoconcessão passou trivialmente — não porque a policy falhou, mas porque a policy nunca
+chegou a ser avaliada com o papel errado em vigor.
+
+**Diagnóstico confirmado, não presumido.** Antes de aceitar qualquer uma das duas explicações (schema
+furado vs. sessão perdida), foi rodado um teste isolado, numa única execução:
+
+```sql
+begin;
+select set_config('request.jwt.claims', '{"sub":"...","role":"authenticated"}', true);
+set local role authenticated;
+insert into public.contas_autorizadas (user_id) values (gen_random_uuid());
+rollback;
+```
+
+Resultado: `permission denied for table contas_autorizadas`. Com `authenticated` de verdade em vigor, o
+schema recusa exatamente como desenhado. A causa era mesmo a sessão do SQL Editor, não o schema.
+
+**Correção aplicada em `0002-aceite.sql`:** todo bloco que precisa impersonar `authenticated`/`anon` agora
+refaz `set_config`/`set role` do zero, sem depender de bloco anterior, e trava logo em seguida com
+
+```sql
+do $$
+begin
+  if current_user <> 'authenticated' then
+    raise exception 'esperado current_user = authenticated, veio %. A sessão não herdou o papel - pare aqui.', current_user;
+  end if;
+end $$;
+```
+
+Se o mesmo problema de sessão se repetir no futuro, o roteiro agora aborta com erro alto e explícito, em
+vez de continuar silenciosamente com o papel errado e produzir um "sucesso" que não prova nada.
+
+**Por que isso não desqualifica a Fase 2, e a reforça.** É exatamente o motivo de a fase só ter sido
+marcada como entregue depois da execução real, não da escrita do script (ver corpo desta decisão, acima):
+um erro de metodologia de teste só aparece rodando de verdade. A linha espúria foi apagada antes do aceite
+final; a base ficou vazia (`estado=0, estado_versoes=0`) e a allowlist com a única linha legítima
+(`contas_autorizadas=1`), como o D9 e o D7 preveem.
 
 ### Reversibilidade
 

@@ -1251,10 +1251,10 @@ Fase 2 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`, `DE
 `RN034`). **Nenhum arquivo de `src/` foi tocado** — esta fase é infraestrutura de
 servidor, e o app continuou exibindo `v0.3.37.0` sem alteração de comportamento.
 
-**Estado real: o script está escrito e ainda não foi executado.** O projeto Supabase é
-criado na conta do usuário, com senha que por decisão (D8) não passa por este repositório.
-O aceite da fase é rodar `supabase/sql/0002-aceite.sql` no painel, não a existência do
-arquivo.
+**Executado e validado no painel real em 2026-08-18.** O projeto Supabase foi criado na
+conta do usuário, com senha que por decisão (D8) não passou por este repositório. O
+aceite (`supabase/sql/0002-aceite.sql`) rodou até o fim — com uma correção no meio do
+caminho, ver "Corrigido" abaixo.
 
 ### Adicionado
 
@@ -1275,7 +1275,16 @@ arquivo.
 
 ### Corrigido
 
-- Não aplicável.
+- **`0002-aceite.sql` deixou de depender de continuidade de sessão entre execuções do SQL
+  Editor.** O roteiro original assumia que `set role authenticated` de um bloco
+  sobreviveria até o bloco seguinte, rodado como um "Run" separado. Não sobreviveu: a
+  sessão voltou a ser `postgres` (dono das tabelas), e um `insert` de autoconcessão de
+  acesso que deveria ser negado passou sem erro, criando uma linha espúria em
+  `contas_autorizadas`. Não era falha do schema — confirmado por um teste isolado
+  (`begin; set local role authenticated; ...; rollback;`) que `authenticated` de verdade
+  recebe `permission denied` no mesmo comando. Cada bloco agora refaz
+  `set_config`/`set role` do zero e trava com um `do $$ ... raise exception ... $$;` que
+  aborta com erro claro se a sessão não virou quem devia.
 
 ### Removido
 
@@ -1308,7 +1317,13 @@ arquivo.
 
 - Não aplicável a suíte automatizada: não há código de aplicação nesta fase. Os 222 testes
   e o lint seguem no mesmo estado da Fase 1.
-- A verificação desta fase é o `0002-aceite.sql`, pendente de execução no painel.
+- **A verificação desta fase é o `0002-aceite.sql`, executado no painel real em
+  2026-08-18.** anon recebe `permission denied` (não RLS filtrando); `authenticated` fora
+  da allowlist vê 0 linhas; a conta autorizada insere, atualiza com a versão certa (vira
+  versão 2, arquiva a 1 em `estado_versoes`) e é recusada com a versão errada; os três
+  comandos indevidos (apagar `estado`, forjar histórico, se autoconceder acesso) foram
+  negados com `permission denied`. Base final: `estado=0`, `estado_versoes=0`,
+  `contas_autorizadas=1`.
 
 ## [0.3.38 — Fase 1] - 2026-08-18
 

@@ -1354,27 +1354,31 @@ do backup e fora do payload. Como "Apagar dados financeiros" limpa todas as chav
 `fpro_`, o campo é regravado logo depois; sem isso ele sumiria do LocalStorage e
 continuaria em memória, e a divergência só apareceria no próximo reload.
 
-#### Fase 2 — Infra Supabase (risco baixo, não toca o app) — SCRIPT PRONTO 2026-08-18, AGUARDANDO EXECUÇÃO NO PAINEL
+#### Fase 2 — Infra Supabase (risco baixo, não toca o app) — ENTREGUE 2026-08-18
 
 - [x] Tabela de uma linha: `estado(payload jsonb, versao, updatedAt, usuario)`, com
   RLS e retenção das últimas versões (o ancestral do merge sai daqui).
   **Escrita e versionada** em `supabase/sql/0001-estado-e-rls.sql`.
-- [ ] Conta compartilhada (D7); `anon key` no bundle e **senha fora do repositório e
+- [x] Conta compartilhada (D7); `anon key` no bundle e **senha fora do repositório e
   fora das variáveis de ambiente do Vercel** (D8). Login manual — senha embutida no
-  código daria acesso total a quem lesse o bundle.
-- Aceite: insert e select manuais pelo painel respeitando a RLS.
+  código daria acesso total a quem lesse o bundle. Conta criada, cadastro público
+  desligado, `.env.local` preenchido com `Project URL`/`anon key`.
+- [x] Aceite: insert e select manuais pelo painel respeitando a RLS. Rodado por completo
+  em 2026-08-18 (`0002-aceite.sql`), depois de uma correção no meio do caminho.
 
 ##### Resultado da Fase 2
 
 **O que existe:** `supabase/sql/0001-estado-e-rls.sql` (schema, gatilhos, RLS, grants),
-`supabase/sql/0002-aceite.sql` (o roteiro de aceite, bloco a bloco, com o resultado
-esperado de cada um), `supabase/README.md` (passo a passo do painel) e `.env.example`.
-`DEC-0042` registra as decisões de schema. Nenhuma linha de `src/` foi tocada — esta
+`supabase/sql/0002-aceite.sql` (o roteiro de aceite, autocontido bloco a bloco),
+`supabase/README.md` (passo a passo do painel) e `.env.example`. `DEC-0042` registra as
+decisões de schema e o achado de metodologia. Nenhuma linha de `src/` foi tocada — esta
 fase não altera o app, como o roadmap previa.
 
-**O que não existe:** nada disso rodou. O projeto Supabase é criado na conta do Jorge,
-com senha que por decisão (D8) não passa por aqui. Enquanto o `0002-aceite.sql` não for
-executado no painel, **a fase não está entregue** — o aceite é a execução, não o script.
+**Executado e validado no painel real**, não só escrito: projeto Supabase criado, conta
+compartilhada criada com cadastro público desligado, schema aplicado, UID autorizado na
+allowlist, e o roteiro de aceite rodado do início ao fim. `.env.local` local preenchido
+com `Project URL` e `anon key` (públicas por design); a `service_role key` não saiu do
+painel.
 
 **Quatro decisões de schema além do que a fase pedia**, detalhadas na `DEC-0042`:
 
@@ -1394,6 +1398,23 @@ executado no painel, **a fase não está entregue** — o aceite é a execução
 servidor: `update estado set ... where id = 1 and versao = <a carregada>`. Uma linha
 afetada é aceite; zero linhas é a recusa. A Fase 3 fica sendo cliente e mensagem de erro,
 não mecânica nova.
+
+**Dois achados reais só apareceram ao rodar o aceite de verdade, não na leitura do
+script** — motivo pelo qual esta fase só foi marcada como entregue depois da execução:
+
+1. **Falso alarme investigado até a causa real.** O Bloco 5 (autoconcessão de acesso)
+   pareceu ter sido bem-sucedido na primeira rodada — apareceu uma linha nova em
+   `contas_autorizadas` com um UUID aleatório. Não era o schema: era o SQL Editor do
+   Supabase não preservando `set role`/`set_config` entre execuções separadas ("Run" por
+   bloco). O Bloco 5 rodou como `postgres` (dono das tabelas, ignora RLS), não como
+   `authenticated`. Confirmado com um teste isolado (`begin; set local role
+   authenticated; ...; rollback;`) que o insert é negado quando a sessão é mesmo
+   `authenticated`.
+2. **Roteiro corrigido para não depender de continuidade de sessão.** `0002-aceite.sql`
+   passou a refazer `set_config`/`set role` do zero em cada bloco, com um `do $$ ...
+   raise exception ... $$;` logo depois de cada `set role` que aborta com erro claro se
+   `current_user` não virou quem devia — transforma "sucesso indevido e silencioso" em
+   erro visível, caso o mesmo problema se repita.
 
 #### Fase 3 — Trava otimista (risco médio)
 
