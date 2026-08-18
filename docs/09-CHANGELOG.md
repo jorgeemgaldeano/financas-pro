@@ -1245,6 +1245,71 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.38 — Fase 2] - 2026-08-18
+
+Fase 2 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`, `DEC-0042`,
+`RN034`). **Nenhum arquivo de `src/` foi tocado** — esta fase é infraestrutura de
+servidor, e o app continuou exibindo `v0.3.37.0` sem alteração de comportamento.
+
+**Estado real: o script está escrito e ainda não foi executado.** O projeto Supabase é
+criado na conta do usuário, com senha que por decisão (D8) não passa por este repositório.
+O aceite da fase é rodar `supabase/sql/0002-aceite.sql` no painel, não a existência do
+arquivo.
+
+### Adicionado
+
+- `supabase/sql/0001-estado-e-rls.sql`: tabela `estado` de uma linha (`payload jsonb`,
+  `versao`, `usuario`, `atualizado_em`), tabela `estado_versoes` (o ancestral do merge de
+  três vias), allowlist `contas_autorizadas`, gatilhos e RLS. Idempotente.
+- `supabase/sql/0002-aceite.sql`: roteiro de aceite bloco a bloco, com o resultado
+  esperado de cada um — incluindo os três comandos que **devem** falhar (apagar o estado,
+  forjar histórico, se autoconceder acesso).
+- `supabase/README.md`: passo a passo do painel, com a regra da senha em destaque.
+- `.env.example`: `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, as duas públicas por
+  design. `.env` e `.env.local` já estavam no `.gitignore`.
+- `DEC-0042`: as quatro decisões de schema que a frase do roadmap não cobria.
+
+### Alterado
+
+- Não aplicável. Nenhum arquivo existente do app foi modificado.
+
+### Corrigido
+
+- Não aplicável.
+
+### Removido
+
+- Não aplicável.
+
+### Migração
+
+- **Nenhuma.** Não há LocalStorage envolvido nesta fase.
+
+### Segurança
+
+- A RLS não libera `to authenticated` puro: exige presença na allowlist. O cadastro
+  público vem ligado por padrão no Supabase e a `anon key` está no bundle por decisão —
+  sem a allowlist, qualquer pessoa que lesse o bundle poderia se cadastrar e ler a base.
+- `versao` e `atualizado_em` são carimbadas pelo servidor, por gatilho. O cliente não
+  escolhe o próprio número de versão, que é o valor sobre o qual a trava otimista decide.
+- `estado_versoes` não tem policy de escrita e teve `insert/update/delete` revogados de
+  `authenticated`: só o gatilho grava. Histórico não se forja.
+- `delete` em `estado` revogado: "Apagar dados financeiros" (T4) propaga como payload
+  vazio, não como sumiço da linha.
+- **Os revokes explícitos são o ponto fino desta fase.** Ausência de policy apenas
+  *filtra linha* — um delete indevido retornaria "0 linhas afetadas", que é silêncio no
+  lugar de recusa, exatamente o que a invariante de persistência do projeto proíbe. Só o
+  `revoke` transforma isso em erro. O Supabase concede `all` em `public` para
+  `anon`/`authenticated` por default privilege, então o `grant` do script não bastava.
+- A `service_role key` existe só no painel. Não entra no repositório, no `.env.local` nem
+  no Vercel.
+
+### Testes
+
+- Não aplicável a suíte automatizada: não há código de aplicação nesta fase. Os 222 testes
+  e o lint seguem no mesmo estado da Fase 1.
+- A verificação desta fase é o `0002-aceite.sql`, pendente de execução no painel.
+
 ## [0.3.38 — Fase 1] - 2026-08-18
 
 Fase 1 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`, `DEC-0041`,

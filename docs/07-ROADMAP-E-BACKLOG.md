@@ -1354,14 +1354,46 @@ do backup e fora do payload. Como "Apagar dados financeiros" limpa todas as chav
 `fpro_`, o campo é regravado logo depois; sem isso ele sumiria do LocalStorage e
 continuaria em memória, e a divergência só apareceria no próximo reload.
 
-#### Fase 2 — Infra Supabase (risco baixo, não toca o app)
+#### Fase 2 — Infra Supabase (risco baixo, não toca o app) — SCRIPT PRONTO 2026-08-18, AGUARDANDO EXECUÇÃO NO PAINEL
 
-- [ ] Tabela de uma linha: `estado(payload jsonb, versao, updatedAt, usuario)`, com
+- [x] Tabela de uma linha: `estado(payload jsonb, versao, updatedAt, usuario)`, com
   RLS e retenção das últimas versões (o ancestral do merge sai daqui).
+  **Escrita e versionada** em `supabase/sql/0001-estado-e-rls.sql`.
 - [ ] Conta compartilhada (D7); `anon key` no bundle e **senha fora do repositório e
   fora das variáveis de ambiente do Vercel** (D8). Login manual — senha embutida no
   código daria acesso total a quem lesse o bundle.
 - Aceite: insert e select manuais pelo painel respeitando a RLS.
+
+##### Resultado da Fase 2
+
+**O que existe:** `supabase/sql/0001-estado-e-rls.sql` (schema, gatilhos, RLS, grants),
+`supabase/sql/0002-aceite.sql` (o roteiro de aceite, bloco a bloco, com o resultado
+esperado de cada um), `supabase/README.md` (passo a passo do painel) e `.env.example`.
+`DEC-0042` registra as decisões de schema. Nenhuma linha de `src/` foi tocada — esta
+fase não altera o app, como o roadmap previa.
+
+**O que não existe:** nada disso rodou. O projeto Supabase é criado na conta do Jorge,
+com senha que por decisão (D8) não passa por aqui. Enquanto o `0002-aceite.sql` não for
+executado no painel, **a fase não está entregue** — o aceite é a execução, não o script.
+
+**Quatro decisões de schema além do que a fase pedia**, detalhadas na `DEC-0042`:
+
+1. **Allowlist `contas_autorizadas`.** "RLS" sozinha não fecha o buraco: o cadastro
+   público vem ligado por padrão no Supabase e a `anon key` está no bundle, então
+   `to authenticated` liberaria qualquer pessoa que se cadastrasse. A policy passa a
+   exigir presença numa tabela que a própria API não enxerga.
+2. **Versão e data carimbadas pelo servidor**, por gatilho `before insert/update`. O
+   cliente manda payload e `usuario` e não escolhe o próprio número de versão. Relógio de
+   notebook errado deixa de poder reordenar o histórico.
+3. **Histórico em tabela separada, escrita só pelo gatilho.** O cliente lê o ancestral e
+   não grava nele. Sem policy de escrita, histórico não se forja.
+4. **Retenção de 100 versões**, por contagem e não por prazo. Ver o raciocínio do número
+   na `DEC-0042`.
+
+**A trava otimista da Fase 3 já está pronta como cláusula `where`**, não como código de
+servidor: `update estado set ... where id = 1 and versao = <a carregada>`. Uma linha
+afetada é aceite; zero linhas é a recusa. A Fase 3 fica sendo cliente e mensagem de erro,
+não mecânica nova.
 
 #### Fase 3 — Trava otimista (risco médio)
 

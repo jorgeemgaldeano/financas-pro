@@ -530,3 +530,56 @@ Três caminhos gravam com `{ stamp: false }` e preservam os carimbos que já exi
 1. Restauração de backup — as datas vêm do arquivo.
 2. Normalização de leitura (`migrationPipeline` / `transactionNormalizer`).
 3. Migração automática de campo (ex.: `contaPagamentoId` em cartões antigos).
+
+## Atualização 2026-08-18 — Modelo do servidor (v0.3.38 Fase 2)
+
+Ver `RN034`, `DEC-0039` e `DEC-0042`. O schema vive versionado em
+`supabase/sql/0001-estado-e-rls.sql`; o passo a passo do painel, em `supabase/README.md`.
+**Nada disso altera o LocalStorage**: a sincronização é camada acima do formato já
+existente, sem bump de `LS_VERSION`.
+
+### O que o servidor guarda
+
+```
+estado                        uma linha só, id = 1 garantido por check
+  payload        jsonb        exatamente o retorno de normalizeBackupPayload():
+                              as 13 chaves de BACKUP_STORAGE_KEYS
+  versao         bigint       numerada pelo servidor, por gatilho
+  usuario        text         quem gravou, vindo da chave `usuario` do dispositivo
+  atualizado_em  timestamptz  carimbada pelo servidor, não pelo relógio do notebook
+
+estado_versoes                as versões já substituídas
+  versao         bigint       PK
+  payload        jsonb        o ancestral que o merge de três vias busca
+  usuario        text
+  atualizado_em  timestamptz
+  arquivado_em   timestamptz
+                              escrita só pelo gatilho; o cliente lê e não grava
+                              retenção: as 100 versões mais recentes
+
+contas_autorizadas            allowlist de UIDs; RLS ligada e nenhuma policy,
+                              portanto invisível pela API
+```
+
+O servidor **não interpreta o payload**. Não há coluna por entidade, não há validação de
+regra de negócio e não há consulta analítica: `projectionService` e `saldoService` rodam
+no cliente, sobre o array em memória.
+
+### A relação com o LocalStorage
+
+| LocalStorage | Servidor |
+|---|---|
+| 13 chaves `fpro_v1_*` de `BACKUP_STORAGE_KEYS` | as mesmas 13, dentro de `payload` |
+| chave `usuario` | **não sobe**; vira a coluna `usuario` de quem gravou |
+| `updatedAt`/`updatedBy` por registro (`RN035`) | viajam dentro do `payload`, intactos |
+
+A chave `usuario` continua fora do payload pelo motivo da `RN035`: a conta do Supabase é
+compartilhada, então se ela sincronizasse, os dois dispositivos passariam a ter a mesma
+identidade e a atribuição deixaria de existir.
+
+### A versão, do lado de cá
+
+O cliente guarda em memória a versão que carregou e a devolve na cláusula `where` do
+update. **Ela não é persistida no LocalStorage**, pela mesma razão que o ancestral não é
+(`DEC-0039`): o que precisa sobreviver a um reload é o payload, e depois de um reload o
+cliente carrega a versão corrente do servidor de qualquer jeito.

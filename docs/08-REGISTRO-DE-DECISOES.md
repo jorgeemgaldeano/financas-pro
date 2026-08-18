@@ -2403,3 +2403,112 @@ depois.
 (ver `RN035`). Se o merge da Fase 4 mostrar que a resolução por valor não basta para esses três, a saída
 não é forçar carimbo neles: é reestruturá-los como listas de registros — o que **é** mudança de formato e
 exigiria migração, isto é, decisão nova.
+
+## DEC-0042 — Schema do servidor: allowlist, numeração pelo servidor e retenção por contagem
+
+Data: 2026-08-18
+
+### Contexto
+
+A Fase 2 da v0.3.38 pedia uma frase: "tabela de uma linha `estado(payload jsonb, versao, updatedAt,
+usuario)`, com RLS e retenção das últimas versões". Escrever o SQL correspondente exigiu decidir quatro
+coisas que a frase não cobria, e uma delas é uma falha de segurança real na leitura ingênua do enunciado.
+
+Nada disso é código do app: a Fase 2 não toca `src/`.
+
+### Decisão
+
+**1. Allowlist `contas_autorizadas`, e não `to authenticated` puro.**
+
+A RLS ingênua deste desenho seria `for select to authenticated using (true)`: a conta é compartilhada
+(D7), `auth.uid()` é o mesmo para os dois dispositivos, então não há o que filtrar. Isso está errado, e o
+motivo não aparece no enunciado: **o cadastro público vem ligado por padrão no Supabase**, e a `anon key`
+está no bundle por decisão (D8). Qualquer pessoa que abrisse a URL, lesse a chave e criasse uma conta
+viraria `authenticated` — exatamente o papel que a policy liberaria.
+
+As policies passam a exigir `public.conta_autorizada()`, que verifica presença numa tabela com RLS ligada
+e **nenhuma policy**: invisível pela API, administrada só pelo painel. Desligar o cadastro público
+continua sendo passo obrigatório do roteiro; as duas travas juntas são o desenho, não redundância
+decorativa — a primeira impede a conta existir, a segunda impede que ela sirva para alguma coisa.
+
+**2. `versao` e `atualizado_em` são carimbadas pelo servidor, por gatilho.**
+
+O cliente envia `payload` e `usuario`. A numeração e a data são atribuídas em `before insert/update`. Sem
+isso, cliente com relógio errado reordena o histórico, e cliente com defeito escolhe o próprio número de
+versão — que é justamente o valor sobre o qual a trava otimista decide.
+
+Efeito colateral bem-vindo: a trava da Fase 3 vira uma cláusula `where`, não código de servidor.
+`update estado set ... where id = 1 and versao = <a carregada>`; uma linha afetada é aceite, zero é recusa.
+A Fase 3 fica sendo cliente e mensagem de erro.
+
+**3. Histórico em `estado_versoes`, escrito só pelo gatilho.**
+
+O ancestral do merge de três vias mora numa tabela própria, alimentada pelo mesmo gatilho que arquiva a
+versão substituída. O cliente tem policy de `select` e nenhuma de escrita. A versão corrente não é copiada
+para lá: ela vive só em `estado`, e o ancestral que a Fase 4 busca nunca é a corrente — se fosse, não teria
+havido recusa.
+
+**Com `revoke` explícito, e não só com ausência de policy.** Este é o detalhe fino da fase, e a primeira
+versão do script errava nele: ausência de policy no Postgres **filtra linha, não levanta erro**. Um delete
+indevido em `estado` retornaria "0 linhas afetadas" — silêncio no lugar de recusa, que é exatamente o que a
+invariante de persistência do projeto proíbe. Somam-se dois fatos: o Supabase concede `all` em `public`
+para `anon` e `authenticated` por default privilege, então o `grant` do script não subtraía nada. O
+`revoke delete on estado` e o `revoke insert, update, delete on estado_versoes` são o que transforma
+tentativa indevida em erro visível. Os gatilhos seguem escrevendo porque são `SECURITY DEFINER` e rodam
+como o dono das tabelas.
+
+**4. Retenção de 100 versões, por contagem e não por prazo.**
+
+### Raciocínio do número
+
+O que precisa sobreviver é a versão que o **outro** dispositivo carregou e ainda não substituiu. Sob a D6
+(sync ao abrir, ao sair e por botão), dois dispositivos produzem algo entre 10 e 20 versões por dia de uso
+normal. 100 versões cobrem de cinco a dez dias — folga suficiente para o caso que realmente preocupa, que
+é aba deixada aberta por dias sem sincronizar.
+
+Prazo foi descartado como critério: "90 dias" (o número que a `DEC-0037` usava para o expurgo de tombstone,
+já revogado) daria de 900 a 1.800 payloads retidos. A algumas centenas de KB cada, isso passa de 500 MB —
+o teto do plano gratuito inteiro. Contagem limita o pior caso; prazo não limita nada.
+
+Se o ancestral tiver sido expurgado, o comportamento já está definido e não é falha: degrada para a
+recusa com backup da Fase 3 (`DEC-0039`, decisão de implementação 3).
+
+### Alternativas avaliadas e descartadas
+
+- **Função RPC `salvar_estado(payload, versao_esperada, usuario)` em vez de `update ... where`.** Seria
+  necessária se a trava exigisse mais de um comando atômico. Não exige: o `update` condicional já é
+  atômico, e a contagem de linhas afetadas já é a resposta. Uma RPC acrescentaria uma camada para
+  transportar a mesma informação.
+- **Guardar também a versão corrente em `estado_versoes`.** Simplificaria o raciocínio ("o histórico tem
+  tudo") ao custo de duplicar o payload maior. Descartada por não existir consulta que precise disso.
+- **Treze tabelas em vez de um `jsonb`.** Já descartada na D2 e mantida aqui pelo mesmo motivo: o servidor
+  não faz nenhuma consulta analítica. `projectionService` e `saldoService` rodam no cliente.
+- **Policy por e-mail (`auth.jwt() ->> 'email' = '...'`) em vez de allowlist.** Descartada por obrigar o
+  endereço da conta a viver dentro do schema versionado em git.
+
+### O que mudou
+
+- `supabase/sql/0001-estado-e-rls.sql` (novo): schema, gatilhos, RLS e grants. Idempotente.
+- `supabase/sql/0002-aceite.sql` (novo): roteiro de aceite bloco a bloco, com o resultado esperado de
+  cada um, incluindo os três comandos que **devem** falhar.
+- `supabase/README.md` (novo): passo a passo do painel, com a regra da senha em destaque.
+- `.env.example` (novo): `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. `.env` e `.env.local` já estavam
+  no `.gitignore`.
+- **Nenhum arquivo de `src/` foi tocado.**
+
+### Estado da fase
+
+**O script está escrito; nada foi executado.** O projeto Supabase é criado na conta do usuário, com senha
+que por decisão (D8) não passa por este repositório nem por variável de ambiente do Vercel. O aceite da
+Fase 2 é a execução do `0002-aceite.sql` no painel, não a existência do arquivo.
+
+### Reversibilidade
+
+**Total hoje.** Não há projeto criado, não há dado gravado e o app não conhece o Supabase. Reverter é
+apagar quatro arquivos. Depois de a base entrar em uso, mudar o formato de `payload` deixa de ser
+reversível de graça — mas o formato de `payload` é o do backup, que já existe e não muda aqui.
+
+### Nota de segurança
+
+A `service_role key` do painel ignora RLS por construção. Ela não entra no repositório, não entra no
+`.env.local` e não entra no Vercel. O único lugar em que ela existe é o painel do Supabase.
