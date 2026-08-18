@@ -10,7 +10,7 @@ import { CategorySelect } from "../molecules/CategorySelect.jsx";
 import { catColor, catIcon } from "../../utils/categoryTreeUtils.js";
 import { getCardPaymentAccountId } from "../../services/cardInvoiceService.js";
 import { INIT_PARAMS } from "../../constants/seedData.js";
-export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, reassignAndDeleteCard, reassignAndDeleteAccount, recategorizeWholeCat, reassignReasonMsg, onExport, onImport, onReset }) {
+export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, reassignAndDeleteCard, reassignAndDeleteAccount, recategorizeWholeCat, reassignReasonMsg, onExport, onImport, onReset, usuario, setUsuario }) {
   const [section, setSection] = useState("cats");
   const [paramsBuf, setParamsBuf] = useState({...params});
   const [newCat, setNewCat] = useState({ nome:"", cor:"#B0BEC5", icon:"📦" });
@@ -271,6 +271,36 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
       )}
 
       {section==="geral"&&(
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        {/* v0.3.38 Fase 1 (D7) — identificação deste dispositivo. Fica fora do
+            backup e da sincronização: a conta compartilhada não distingue quem
+            gravou, então este campo é a única atribuição que vai existir. */}
+        <div style={card2()}>
+          <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>Identificação neste dispositivo</div>
+          <div style={{ fontSize:12, color:C.soft, marginBottom:12 }}>
+            Seu nome fica gravado neste navegador e é anexado a cada registro que você criar ou alterar.
+            Serve para saber quem fez o quê quando os dois dispositivos estiverem sincronizados.
+            Não é enviado no backup nem substituído ao restaurar um.
+          </div>
+          <div style={{ maxWidth:320 }}>
+            <div style={lbl2}>Seu nome</div>
+            <input
+              style={inp2}
+              type="text"
+              maxLength={40}
+              placeholder="ex.: Jorge"
+              value={usuario||""}
+              onChange={e=>setUsuario(e.target.value)}
+            />
+            {!String(usuario||"").trim() && (
+              <div style={{ fontSize:11, color:C.gold, marginTop:6 }}>
+                Enquanto estiver em branco, as alterações ficam sem autor. A sincronização entre
+                dispositivos vai exigir este campo preenchido.
+              </div>
+            )}
+          </div>
+        </div>
+
         <div style={card2()}>
           <div style={{ fontWeight:700, fontSize:15, marginBottom:16 }}>Parâmetros Gerais</div>
           <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
@@ -336,6 +366,7 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
               <div style={{ fontSize:12, color:C.gold, background:C.gold+"11", padding:"8px 12px", borderRadius:8 }}>⚠️ Alterações não salvas — clique em "Salvar parâmetros" para aplicar.</div>
             )}
           </div>
+        </div>
         </div>
       )}
 

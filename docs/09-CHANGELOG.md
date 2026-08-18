@@ -1245,6 +1245,57 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.38 — Fase 1] - 2026-08-18
+
+Fase 1 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`, `DEC-0041`,
+`RN035`). **A versão exibida no app continua `v0.3.37.0`**: nenhuma sincronização
+existe ainda, e o que esta fase entrega é a base de dados que a Fase 4 vai precisar.
+
+### Adicionado
+
+- `src/services/recordStamp.js`: carimbo `updatedAt` + `updatedBy` nos registros que
+  mudaram, aplicado no `useLS` (fronteira de persistência), não em cada setter do
+  `App.jsx`. "Registro" é regra estrutural — objeto com `id` dentro de um array, em
+  qualquer profundidade —, então `cats[].subs[]`, `dividas[].amortizacoes[]`,
+  `cofrinhos[].aportes[]` e `params.autoCategoryRules[]` entram sem lista de exceções.
+- Chave `usuario` no LocalStorage e o campo "Identificação neste dispositivo" na aba
+  Parâmetros → Geral, com aviso enquanto estiver em branco. **Fora do backup e fora do
+  payload de sincronização**: a conta do Supabase é compartilhada, então é esse campo
+  que distingue quem gravou.
+- `tests/recordStamp.test.js`: 29 testes — criação e edição por entidade, aninhados,
+  exclusão, primeira escrita, e as três entidades que deliberadamente não recebem
+  carimbo (teste que trava a ausência, para ninguém "consertar" isso sem querer).
+
+### Alterado
+
+- `useLS` aceita `{ stamp: false }` no setter. Usado em três escritas que não são
+  edição de ninguém: restauração de backup, normalização de leitura
+  (`useTransactionsStorage`) e migração automática de `contaPagamentoId` em cartões.
+- "Apagar dados financeiros" regrava o `usuario` depois do `clearFinancasProStorage`,
+  que limpa todas as chaves `fpro_`. Sem isso o campo sumiria do LocalStorage e
+  continuaria em memória, e a divergência só apareceria no próximo reload.
+
+### Corrigido
+
+- Não aplicável. Nenhum defeito existente foi tocado.
+
+### Removido
+
+- Não aplicável.
+
+### Migração
+
+- **Nenhuma.** Campos aditivos, sem bump de `LS_VERSION`. Registro antigo sem carimbo
+  continua válido e ganha carimbo na primeira alteração real.
+
+### Testes
+
+- 222 testes passando (16 arquivos), lint com 0 erros, build limpo.
+- Verificado no navegador: criar lançamento carimbou 1 registro entre 23; renomear
+  categoria carimbou a categoria e nenhuma das 4 subcategorias nem a categoria irmã;
+  salvar sem alterar não moveu a data; `usuario` sobreviveu ao reload; base recém-
+  semeada nasce com zero carimbos.
+
 ## [0.3.38 — Fase 0] - 2026-08-18
 
 Fase 0 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`): higiene

@@ -2324,3 +2324,82 @@ persistido depende disto.
 O `"name"` do `package.json` continua `financas-pro-localhost`, resquício da fase em que o app só rodava
 em `localhost`. Com o deploy da Fase A o nome fica enganoso, mas renomear pacote é assunto separado e não
 foi tocado aqui.
+
+## DEC-0041 — Carimbo de alteração na fronteira de persistência, e não nos setters
+
+Data: 2026-08-18
+
+### Contexto
+
+A Fase 1 da v0.3.38 pedia "carimbo `updatedAt` em toda escrita de registro, em todas as entidades". O
+`App.jsx` tem dezenas de pontos que escrevem estado (`setTrans`, `setCards`, `setCats`, ...), e antes
+desta fase o carimbo existia em três deles e em dois services — os cinco lugares onde alguém lembrou.
+
+O `updatedAt` é o único item do desenho que **não pode ser retrofitado**: dado escrito hoje sem carimbo
+nunca mais recupera a data em que foi alterado.
+
+### Decisão
+
+**O carimbo é aplicado no `useLS`, na fronteira de persistência**, por `stampChangedRecords`, que recebe
+o par (anterior, próximo) que o React já entrega ao setter funcional. Nenhum ponto de escrita do `App.jsx`
+precisa lembrar de carimbar.
+
+Três decisões acompanham, e vão além do que o roadmap pedia:
+
+1. **`updatedBy` além de `updatedAt`.** O aceite da Fase 4 diz "apresentar para escolha o que os dois
+   mudaram, mostrando `updatedAt` e `usuario`". Sem atribuição por registro, essa tela mostraria a
+   autoria do payload inteiro, não de cada linha. E, como o `updatedAt`, atribuição não é retrofitável:
+   registro gravado hoje sem autor nunca mais sabe quem o alterou.
+2. **A regra de "o que é registro" é estrutural, não uma lista.** Objeto com `id` dentro de um array, em
+   qualquer profundidade. Com isso `cats[].subs[]` (recursivo), `dividas[].amortizacoes[]`,
+   `cofrinhos[].aportes[]` e `params.autoCategoryRules[]` entram sem lista de exceções para manter
+   atualizada — e uma entidade nova nasce carimbada sem ninguém precisar lembrar.
+3. **Três escritas são isentas** (`stamp:false`): restauração de backup, normalização de leitura e
+   migração automática de campo. Ver `RN035`.
+
+### Raciocínio
+
+A alternativa óbvia era carimbar em cada setter. Foi descartada por um motivo concreto, não estético: o
+ponto esquecido não falha em teste nem em build — ele falha na Fase 4, como registro que o merge não sabe
+desempatar, e só aparece quando os dois dispositivos já estiverem em uso real. É o mesmo padrão da dívida
+que a Fase 0 acabou de fechar (`catColor is not defined`), em que nada acusava o esquecimento.
+
+A segunda alternativa era carimbar tudo a cada gravação, sem comparar. É mais simples e está errada: se
+toda escrita recarimba a base inteira, o merge de três vias passa a ver a base inteira como alterada dos
+dois lados, e a tela de conflito vira ruído. O carimbo só tem valor se distinguir o que mudou. Por isso
+`stampChangedRecords` compara ignorando os próprios campos de carimbo e **preserva a referência dos
+objetos que não mudaram** — o que também evita invalidar os `useMemo` do `App.jsx`.
+
+Sobre carimbar o pai quando um filho muda: renomear uma subcategoria carimba a subcategoria **e** a
+categoria que a contém. É intencional. O pai de fato mudou de conteúdo, e o merge precisa enxergar isso
+para não aplicar um pai antigo por cima de um filho novo.
+
+### O que mudou
+
+- `src/services/recordStamp.js` (novo): `stampChangedRecords`, `equalIgnoringStamp`, `setStampUser`.
+- `src/hooks/useLocalStorage.js`: `useLS` carimba antes de persistir; setter aceita `{ stamp: false }`.
+- `src/hooks/useTransactionsStorage.js` e a migração de cartões no `App.jsx`: passam `stamp:false`.
+- `src/App.jsx`: estado `usuario` (chave própria), sincronização com `setStampUser`, restauração de
+  backup sem carimbo, e preservação do `usuario` no "Apagar dados financeiros" — que apaga todas as
+  chaves `fpro_`.
+- `src/components/organisms/ParamsTab.jsx`: campo "Identificação neste dispositivo" na aba Geral.
+- `tests/recordStamp.test.js`: 29 testes, cobrindo criação e edição por entidade, os três casos sem
+  carimbo e a preservação de referência.
+- `RN035` nova em `docs/02-REGRAS-DE-NEGOCIO.md`.
+
+**Sem bump de `LS_VERSION` e sem migração**: os campos são aditivos e registro antigo sem carimbo
+continua válido — ele simplesmente ganha carimbo na primeira vez que for alterado.
+
+### Reversibilidade
+
+**Alta hoje, baixa depois de dias de uso.** Reverter o mecanismo é apagar um arquivo e três linhas. O que
+não se recupera é o tempo: cada dia sem carimbo é um dia de alterações cuja data e cuja autoria não
+existem em lugar nenhum. Foi por isso que esta fase veio antes da infraestrutura do Supabase, e não
+depois.
+
+### Limitação conhecida
+
+`metas`, `saldosIniciais` e os escalares de `params` não recebem carimbo por não terem identidade própria
+(ver `RN035`). Se o merge da Fase 4 mostrar que a resolução por valor não basta para esses três, a saída
+não é forçar carimbo neles: é reestruturá-los como listas de registros — o que **é** mudança de formato e
+exigiria migração, isto é, decisão nova.

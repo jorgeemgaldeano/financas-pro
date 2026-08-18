@@ -548,3 +548,39 @@ O aplicativo sincroniza os dados entre dispositivos por um BaaS (Supabase), mant
 - **A chave pública (`anon key`) pode ir no bundle; a senha da conta não.** A segurança mora na RLS. Login automático com senha embutida no código daria acesso total a qualquer pessoa que lesse o bundle — proibido, inclusive via variável de ambiente do provedor de hospedagem.
 - **"Apagar dados financeiros" propaga** para os dispositivos, com backup automático baixado antes da execução e confirmação por digitação. `window.confirm` deixa de ser confirmação suficiente para essa ação.
 - **Sem mudança de formato de dado:** a adoção da sincronização é aditiva, sem bump de `LS_VERSION` e sem migração.
+
+## RN035 — Autoria e data de alteração de registro
+
+Vigente desde a Fase 1 da v0.3.38 (`DEC-0041`). Sustenta a `RN034`: sem estes dois campos, o merge de
+três vias não tem como mostrar ao usuário o que ele está escolhendo.
+
+**Todo registro identificável carrega `updatedAt` e `updatedBy`.** Registro identificável é objeto com
+`id` dentro de uma lista, em qualquer profundidade: lançamento, conta, cartão, fatura, pessoa, dívida,
+despesa de pessoa, simulação, cofrinho, categoria, subcategoria (recursivamente), amortização de dívida,
+aporte de cofrinho e regra de autocategorização.
+
+**O carimbo só é aplicado quando o registro muda de fato.** Criar um registro carimba; alterar qualquer
+campo dele carimba; salvar sem mudar nada não carimba; e os registros vizinhos que não mudaram mantêm o
+carimbo anterior. Isso não é detalhe de implementação: se toda gravação recarimbasse tudo, o merge da
+`RN034` mostraria a base inteira como conflito e a informação de autoria perderia o valor.
+
+**O que não recebe carimbo, por não ser registro:** `metas` (mapa categoria → limite), `saldosIniciais`
+(mapa mês → conta → valor) e os campos escalares de `params`. São mapas de valores sem identidade
+própria; o merge trata esses casos comparando valor, não data.
+
+**Três escritas são explicitamente isentas de carimbo**, porque não são edição de ninguém:
+
+1. **Restauração de backup.** As datas vêm do arquivo e representam quando cada registro foi editado de
+   verdade. Recarimbar faria o backup restaurado parecer mais novo do que tudo que existe no outro
+   dispositivo.
+2. **Normalização de leitura** (`migrationPipeline`/`transactionNormalizer`) — correção automática de
+   formato.
+3. **Migração automática de campo** (ex.: preenchimento de `contaPagamentoId` em cartões antigos).
+
+**`usuario` é identificação de dispositivo, não dado financeiro.** Fica em chave própria do LocalStorage,
+**fora do backup e fora do payload de sincronização**: a conta do BaaS é compartilhada (`RN034`), então é
+esse campo que distingue quem gravou. Restaurar um backup do outro notebook não altera a identidade deste,
+e "Apagar dados financeiros" preserva o campo.
+
+**Enquanto `usuario` estiver em branco, as alterações ficam sem autor** e a tela avisa. A `RN034` mantém a
+sincronização bloqueada nessa situação.

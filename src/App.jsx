@@ -11,6 +11,7 @@ import { guessCategoryForTransaction, normText } from "./services/categoryServic
 import { buildImportKey, buildLegacyImportKey, expandImportedRows, extractIgnoredBankRows, parseBankFile, parseCardCSV, parseOFX, parseValePluxeeText } from "./services/importService.js";
 import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } from "./constants/storageKeys.js";
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
+import { setStampUser } from "./services/recordStamp.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
 import { fmtBRL, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, dateForMonthDay, fmtDate, formatMonthBR, mKey, MONTHS, monthCompare, monthOffset, todayMonthKey } from "./utils/dateUtils.js";
@@ -235,6 +236,12 @@ export default function App() {
   const [params,   setParams]   = useLS("params", INIT_PARAMS);
   const [saldosIniciais, setSaldosIniciais] = useLS("saldosIniciais", {});
   const [faturas, setFaturas] = useLS("faturas", []);
+  // v0.3.38 Fase 1 (D7) — identificação de quem usa este navegador. Fica FORA
+  // do backup e fora do payload de sincronização de propósito: a conta do
+  // Supabase é compartilhada, então este campo é a única atribuição existente
+  // e precisa ser diferente em cada dispositivo. Restaurar um backup do outro
+  // notebook não pode trocar a identidade deste.
+  const [usuario, setUsuario] = useLS("usuario", "");
   const [selMonth, setSelMonth] = useState(todayMonthKey());
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
@@ -292,12 +299,19 @@ export default function App() {
     const primeiraCC = contas.find(c => c.tipo === "corrente")?.id || contas[0]?.id || "cc1";
     const precisaMigrar = cards.some(c => !c.contaPagamentoId || !c.accountId);
     if (precisaMigrar) {
+      // `stamp:false` — migração automática de campo não é edição do usuário
+      // (mesma razão da normalização em useTransactionsStorage).
       setCards(prev => prev.map(c => {
         const contaAssociada = getCardPaymentAccountId(c, primeiraCC);
         return { ...c, contaPagamentoId: contaAssociada, accountId: contaAssociada };
-      }));
+      }), { stamp: false });
     }
   }, [cards, contas, setCards]);
+
+  // v0.3.38 Fase 1 — mantém o carimbador ciente de quem está escrevendo. O
+  // `recordStamp` vive fora do React (é chamado na fronteira de persistência),
+  // então precisa ser alimentado por aqui.
+  useEffect(() => { setStampUser(usuario); }, [usuario]);
 
   // v0.3.26.7 — L6: exibe aviso quando o LocalStorage falha ao gravar
   // (ex.: quota excedida). Sem isto, a perda de dados seria silenciosa.
@@ -900,19 +914,25 @@ export default function App() {
         );
         if (!confirmed) return;
 
-        setTrans(data.trans);
-        setCards(data.cards);
-        setContas(data.contas);
-        setMetas(data.metas);
-        setPessoas(data.pessoas);
-        setDividas(data.dividas);
-        setDespPess(data.despPess);
-        setCats(data.cats);
-        setParams(data.params);
-        setSaldosIniciais(data.saldosIniciais);
-        setFaturas(data.faturas);
-        setSims(data.simulacoes);
-        setCofrinhos(data.cofrinhos);
+        // v0.3.38 Fase 1 — `stamp:false` em toda a restauração: as datas de
+        // alteração vêm do arquivo de backup e representam quando cada
+        // registro foi editado de verdade. Recarimbar aqui apagaria essa
+        // história e faria o backup restaurado parecer, para o merge da Fase
+        // 4, mais novo do que tudo que existe no outro dispositivo.
+        const semCarimbo = { stamp: false };
+        setTrans(data.trans, semCarimbo);
+        setCards(data.cards, semCarimbo);
+        setContas(data.contas, semCarimbo);
+        setMetas(data.metas, semCarimbo);
+        setPessoas(data.pessoas, semCarimbo);
+        setDividas(data.dividas, semCarimbo);
+        setDespPess(data.despPess, semCarimbo);
+        setCats(data.cats, semCarimbo);
+        setParams(data.params, semCarimbo);
+        setSaldosIniciais(data.saldosIniciais, semCarimbo);
+        setFaturas(data.faturas, semCarimbo);
+        setSims(data.simulacoes, semCarimbo);
+        setCofrinhos(data.cofrinhos, semCarimbo);
         setLastImportReport(data.importReports[0] || null);
         resetImport();
         alert("✅ Backup importado com sucesso! Os dados foram restaurados.");
@@ -944,6 +964,11 @@ export default function App() {
     // Configurações estruturais e Pessoas são preservadas conforme regra atual do projeto.
     clearFinancasProStorage();
     Object.entries(emptyState).forEach(([key, value]) => lsSave(key, value));
+    // v0.3.38 Fase 1 — `clearFinancasProStorage` apaga todas as chaves `fpro_`,
+    // inclusive a identificação do dispositivo, que não é dado financeiro. Sem
+    // esta linha o campo sumiria do LocalStorage mas continuaria em memória, e
+    // a divergência só apareceria no próximo reload.
+    lsSave("usuario", usuario);
 
     setTrans(emptyState.trans);
     setCards(emptyState.cards);
@@ -1792,7 +1817,7 @@ export default function App() {
         )}
 
         {/* PARÂMETROS */}
-        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} reassignAndDeleteCard={reassignAndDeleteCard} reassignAndDeleteAccount={reassignAndDeleteAccount} recategorizeWholeCat={recategorizeWholeCat} reassignReasonMsg={REASSIGN_REASON_MSG} onExport={handleExport} onImport={handleImport} onReset={handleReset}/>}
+        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} reassignAndDeleteCard={reassignAndDeleteCard} reassignAndDeleteAccount={reassignAndDeleteAccount} recategorizeWholeCat={recategorizeWholeCat} reassignReasonMsg={REASSIGN_REASON_MSG} onExport={handleExport} onImport={handleImport} onReset={handleReset} usuario={usuario} setUsuario={setUsuario}/>}
 
     </AppShell>
   );

@@ -25,8 +25,13 @@ export function useTransactionsStorage(initialValue) {
   // Se a normalização mudou algo em relação ao que está persistido, grava a
   // versão corrigida de volta — assim a correção acontece uma vez por sessão
   // (não a cada render) e o LocalStorage fica consistente para a próxima leitura.
+  //
+  // v0.3.38 Fase 1: `stamp:false`. Normalização é correção automática de
+  // formato, não edição de ninguém — carimbá-la atribuiria a quem abriu o app
+  // uma alteração que ele não fez, e faria essa cópia vencer a do outro
+  // dispositivo no merge da Fase 4 sem que nada de real tivesse mudado.
   if (normalized !== trans) {
-    setTrans(normalized);
+    setTrans(normalized, { stamp: false });
     return [normalized, setTrans];
   }
 

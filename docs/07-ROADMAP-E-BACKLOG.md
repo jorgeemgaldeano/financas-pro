@@ -1291,17 +1291,68 @@ Os 42 erros encontrados eram de outra natureza e foram corrigidos:
 caem para recarga completa quando editados. Separar os exports é refatoração, não
 higiene — fica como backlog aberto, e não bloqueia a Fase 1.
 
-#### Fase 1 — `usuario` e `updatedAt` (risco médio)
+#### Fase 1 — `usuario` e `updatedAt` (risco médio) — ENTREGUE 2026-08-18
 
-- [ ] Campo de texto `usuario` no LocalStorage (D7). Como a conta do Supabase é
+- [x] Campo de texto `usuario` no LocalStorage (D7). Como a conta do Supabase é
   compartilhada, é a **única** atribuição existente — sincronização bloqueada
   enquanto estiver vazio.
-- [ ] Carimbo `updatedAt` em toda escrita de registro, em todas as entidades. Hoje
+- [x] Carimbo `updatedAt` em toda escrita de registro, em todas as entidades. Hoje
   existe em três pontos do `App.jsx` e em dois services.
-- [ ] **Puramente aditivo: sem bump de `LS_VERSION`.**
+- [x] **Puramente aditivo: sem bump de `LS_VERSION`.**
 - Aceite: teste que cria e edita cada entidade verificando o carimbo.
 - Nota: `updatedAt` é o único item que **não pode ser retrofitado** — é ele que
   mantém aberta a porta para o desenho C, caso um dia seja necessário.
+
+##### Resultado da Fase 1
+
+`RN035` e `DEC-0041` novas. 29 testes em `tests/recordStamp.test.js` (222 no total),
+lint com 0 erros, build limpo.
+
+**Onde o carimbo mora: na fronteira de persistência (`useLS`), não nos setters.** O
+`App.jsx` tem dezenas de pontos de escrita e o carimbo existia em cinco. Carimbar em
+cada um seria esquecer um, e o esquecido não falharia em teste nem em build — falharia
+na Fase 4, como registro que o merge não sabe desempatar, já com os dois dispositivos
+em uso. `stampChangedRecords` recebe o par (anterior, próximo) que o React entrega ao
+setter funcional e marca só o que mudou de fato.
+
+**Três decisões que vão além do que esta fase pedia**, detalhadas na `DEC-0041`:
+
+1. **`updatedBy` junto com `updatedAt`.** O aceite da Fase 4 fala em mostrar
+   "`updatedAt` e `usuario`" na escolha de conflito; sem atribuição por registro, essa
+   tela mostraria o autor do payload inteiro. E atribuição é tão não-retrofitável
+   quanto data.
+2. **"Registro" é regra estrutural, não lista:** objeto com `id` dentro de um array,
+   em qualquer profundidade. `cats[].subs[]` (recursivo),
+   `dividas[].amortizacoes[]`, `cofrinhos[].aportes[]` e `params.autoCategoryRules[]`
+   entram pela mesma regra, e entidade nova nasce carimbada sem ninguém lembrar.
+3. **Três escritas são isentas** (`stamp:false`): restauração de backup (as datas vêm
+   do arquivo e representam edição real), normalização de leitura e migração automática
+   de campo. Recarimbar qualquer uma delas faria uma cópia vencer a outra no merge sem
+   que nada de real tivesse mudado.
+
+**O carimbo só marca o que mudou.** Salvar sem alterar nada não carimba; os vizinhos
+não alterados mantêm a data anterior; e `stampChangedRecords` devolve a mesma
+referência quando nada mudou, o que também evita invalidar os `useMemo` do `App.jsx`.
+Se toda gravação recarimbasse tudo, o merge da Fase 4 veria a base inteira como
+conflito e a autoria perderia o valor.
+
+**Verificado no navegador, além dos testes:** criar um lançamento carimbou 1 registro
+entre 23 (os outros 22 intactos); renomear uma categoria carimbou a categoria e
+**nenhuma** das 4 subcategorias dela, nem a categoria irmã; clicar em salvar sem mudar
+nada não moveu a data; e o `usuario` sobreviveu ao recarregamento. Numa base recém-
+semeada, zero registros nascem carimbados — a migração automática de cartões roda com
+`stamp:false`.
+
+**Limitação consciente:** `metas` (mapa categoria → limite), `saldosIniciais` (mapa mês
+→ conta → valor) e os escalares de `params` **não** recebem carimbo, por não terem
+identidade própria. O merge da Fase 4 resolve esses três comparando valor, não data. Se
+isso não bastar, a saída não é forçar carimbo: é reestruturá-los como listas de
+registros, o que **é** mudança de formato e exige migração e decisão nova.
+
+**`usuario` é identificação de dispositivo, não dado financeiro** — chave própria, fora
+do backup e fora do payload. Como "Apagar dados financeiros" limpa todas as chaves
+`fpro_`, o campo é regravado logo depois; sem isso ele sumiria do LocalStorage e
+continuaria em memória, e a divergência só apareceria no próximo reload.
 
 #### Fase 2 — Infra Supabase (risco baixo, não toca o app)
 

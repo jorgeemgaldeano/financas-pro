@@ -481,3 +481,52 @@ A restauração não deve remover esses campos.
 - Backup antigo sem regras de autocategorização deve carregar `autoCategoryRules` como lista vazia.
 - Backup inválido não deve substituir dados atuais.
 - Nenhuma chave atual deve ser removida automaticamente durante a restauração sem validação prévia.
+
+## Atualização 2026-08-18 — Carimbo de alteração e identificação de dispositivo (v0.3.38 Fase 1)
+
+Ver `RN035` e `DEC-0041`. Mudança **aditiva**: sem bump de `LS_VERSION`, sem migração.
+
+### Campos novos em todo registro
+
+```js
+{
+  id: "…",
+  // … campos da entidade …
+  updatedAt: "2026-08-18T15:30:45.415Z", // ISO, momento da última alteração real
+  updatedBy: "Jorge"                     // valor da chave `usuario` no momento da escrita
+}
+```
+
+Valem para todo objeto com `id` dentro de uma lista, em qualquer profundidade:
+`trans`, `contas`, `cards`, `faturas`, `pessoas`, `dividas` (e `dividas[].amortizacoes[]`),
+`despPess`, `simulacoes`, `cofrinhos` (e `cofrinhos[].aportes[]`), `cats` (e `cats[].subs[]`,
+recursivamente) e `params.autoCategoryRules[]`.
+
+**Não recebem carimbo**, por não terem identidade de registro: `metas` (mapa `catId` → limite),
+`saldosIniciais` (mapa `mês` → `contaId` → valor) e os campos escalares de `params`.
+
+Registro antigo sem os dois campos é válido: eles aparecem na primeira alteração real do registro.
+Ausência de `updatedAt` significa "nunca alterado desde a adoção do carimbo", não "desconhecido".
+
+### Chave nova: `usuario`
+
+```
+fpro_v1_usuario → "Jorge"   (string, no máximo 40 caracteres)
+```
+
+Identificação de quem usa **este navegador**. Diferente de todas as outras chaves em três pontos:
+
+- **Não entra no backup** (fora de `BACKUP_STORAGE_KEYS`) e não é substituída ao restaurar um.
+- **Não entra no payload de sincronização.** A conta do BaaS é compartilhada (`RN034`), então é este
+  campo que diz quem gravou — se ele sincronizasse, os dois dispositivos teriam a mesma identidade e a
+  atribuição deixaria de existir.
+- **Sobrevive ao "Apagar dados financeiros"**, que limpa todas as chaves `fpro_`: é regravada logo em
+  seguida, por não ser dado financeiro.
+
+### Escritas sem carimbo
+
+Três caminhos gravam com `{ stamp: false }` e preservam os carimbos que já existiam:
+
+1. Restauração de backup — as datas vêm do arquivo.
+2. Normalização de leitura (`migrationPipeline` / `transactionNormalizer`).
+3. Migração automática de campo (ex.: `contaPagamentoId` em cartões antigos).
