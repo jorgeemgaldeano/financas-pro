@@ -1245,6 +1245,85 @@ Corrigir a validação de duplicidade que ainda falhava na importação de cart�
   lançamento de IOF/rotativo tratado de forma diferente. Fica registrado
   como investigação futura.
 
+## [0.3.38 — Fase 3] - 2026-08-18
+
+Fase 3 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`, `DEC-0043`,
+`RN034`). Primeira fase que toca `src/`: o app ganha um cliente Supabase, login manual
+(D8) e o botão "Sincronizar agora", com a trava otimista funcionando de ponta a ponta.
+Os gatilhos automáticos (ao abrir/ao sair, D6) continuam fora de escopo — ficam para a
+Fase 5.
+
+### Adicionado
+
+- `src/services/supabaseClient.js`: client singleton a partir de
+  `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`. Ausência das variáveis desativa a
+  sincronização (`isSupabaseConfigured=false`) sem quebrar build local nem testes.
+- `src/services/syncService.js`: `signIn`, `signOut`, `getSessaoAtual`,
+  `assinarMudancaSessao`, `pullEstado`, `pushEstado` — sem React, testável por injeção de
+  client. Nenhuma função lança exceção não tratada.
+- `src/hooks/useSupabaseSession.js`: ponte React fina para a sessão do supabase-js.
+- `src/App.jsx`: `syncEstado` (metadado de sincronismo do dispositivo, fora do backup,
+  mesmo padrão de `usuario`), `buildSyncPayload`, `handleSyncLogin`, `handleSyncLogout`,
+  `handleSyncNow` (sem argumentos de propósito — é o gancho que a Fase 5 reaproveita).
+- `src/components/organisms/ParamsTab.jsx`: seção "🔄 Sincronização" — login, status da
+  última sincronização, botão "Sincronizar agora".
+- `tests/syncService.test.js`: 18 testes (pull/push em todos os desfechos, auth), com
+  client Supabase falso.
+- `DEC-0043`: as decisões de implementação e a revisão de persistência que bloqueou a
+  primeira versão do fluxo.
+
+### Alterado
+
+- `package.json`: dependência `@supabase/supabase-js` fixada em `2.112.3`.
+- `handleExport` (`src/App.jsx`) passou a devolver `true`/`false` em vez de `void`, para
+  que o fluxo de sync saiba se o backup automático de fato saiu antes de sobrescrever
+  dados locais.
+- `restoreBackupPayload` extraída de dentro de `handleImport` (mesmo comportamento, sem
+  mudança), agora reaproveitada também pela adoção de estado remoto.
+- `handleReset` volta a preservar `syncEstado` depois de `clearFinancasProStorage()`,
+  no mesmo padrão já usado para `usuario` (ver "Corrigido").
+
+### Corrigido
+
+- **Seis achados da revisão do `guardiao-localstorage`, todos corrigidos antes de fechar
+  a fase** (detalhados na `DEC-0043`): `handleReset` deixava de regravar `syncEstado`
+  (resultado dependia de haver reload depois); `handleSyncNow` não tinha `catch` geral
+  (uma exceção de payload remoto malformado parava o spinner em silêncio, sem toast);
+  adoção do estado remoto sobrescrevia dados locais sem confirmação humana (ao contrário
+  de `handleImport`); nada verificava se o backup automático de fato saiu antes da
+  sobrescrita; o payload remoto era normalizado com a mesma tolerância usada para backup
+  local antigo, podendo zerar categorias/contas a partir de um payload truncado;
+  `syncEstado` podia ser carimbado como "sincronizado" antes de confirmar que as 13
+  gravações locais persistiram.
+
+### Removido
+
+- Não aplicável.
+
+### Migração
+
+- **Nenhuma.** `syncEstado` é chave nova, aditiva, fora de `BACKUP_STORAGE_KEYS` — não
+  altera `LS_VERSION` nem `BACKUP_SCHEMA_VERSION`.
+
+### Segurança
+
+- Login manual (D8): senha da conta compartilhada nunca entra no bundle, no repositório
+  nem em variável de ambiente do Vercel — só a `anon key` (pública por design).
+- Payload remoto é validado (as 13 chaves de `BACKUP_STORAGE_KEYS` precisam estar
+  presentes) antes de ser adotado — proteção contra estado truncado no servidor apagar
+  dado local silenciosamente.
+
+### Testes
+
+- `npm test`: 240 testes (222 anteriores + 18 novos), sem regressão. `npx eslint .`: 0
+  erros, 8 warnings (baseline pré-existente do backlog, nenhum novo).
+- Validado manualmente no navegador: a seção "Sincronização" renderiza corretamente;
+  login com credenciais inválidas dispara o round-trip real ao Supabase (erro 400 do
+  servidor) e mostra o toast de erro esperado, sem exceção não tratada.
+- **Não validado nesta sessão** (dependem da senha real da conta compartilhada, D8):
+  login com a conta real, primeiro `insert` em `estado`, e convergência de fato entre
+  dois navegadores/dispositivos. Fica para validação do usuário.
+
 ## [0.3.38 — Fase 2] - 2026-08-18
 
 Fase 2 do bloco "v0.3.38 — Sincronização multi-dispositivo" (`DEC-0039`, `DEC-0042`,

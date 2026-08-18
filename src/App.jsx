@@ -13,6 +13,9 @@ import { LS_VERSION, LS_PREFIX, BACKUP_SCHEMA_VERSION, BACKUP_STORAGE_KEYS } fro
 import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
 import { setStampUser } from "./services/recordStamp.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
+import { isSupabaseConfigured } from "./services/supabaseClient.js";
+import { signIn, signOut, pullEstado, pushEstado } from "./services/syncService.js";
+import { useSupabaseSession } from "./hooks/useSupabaseSession.js";
 import { fmtBRL, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, dateForMonthDay, fmtDate, formatMonthBR, mKey, MONTHS, monthCompare, monthOffset, todayMonthKey } from "./utils/dateUtils.js";
 import { getCardInvoiceCompetence, getCardPaymentAccountId, getInvoiceClosureStatusForMonth, getInvoiceRecordFor, invoiceClosureLabel, invoiceIdFor, invoicePaymentLabel, invoiceStatusByPayment, isInvoiceClosedForNewEntries, paymentStatusByPaidAmount, roundMoney, signedCardAmount } from "./services/cardInvoiceService.js";
@@ -242,6 +245,15 @@ export default function App() {
   // e precisa ser diferente em cada dispositivo. Restaurar um backup do outro
   // notebook não pode trocar a identidade deste.
   const [usuario, setUsuario] = useLS("usuario", "");
+  // v0.3.38 Fase 3 (DEC-0043) — metadado de sincronismo deste dispositivo:
+  // qual foi a última versão do servidor que ele sincronizou com sucesso.
+  // Mesma lógica do `usuario`: fica FORA do backup e fora do payload de sync,
+  // é objeto plano na raiz (sem `id` dentro de array), então
+  // `stampChangedRecords` não o carimba mesmo sem passar {stamp:false}.
+  // versao:null significa "este dispositivo nunca sincronizou com sucesso".
+  const [syncEstado, setSyncEstado] = useLS("syncEstado", { versao: null, sincronizadoEm: null });
+  const [syncing, setSyncing] = useState(false);
+  const { session: syncSession } = useSupabaseSession();
   const [selMonth, setSelMonth] = useState(todayMonthKey());
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
@@ -848,58 +860,92 @@ export default function App() {
   };
 
   // ── Backup / restore / reset ────────────────────────────────────────────────
-  const handleExport = () => {
-    const importBatchIds = Array.from(new Set(
-      trans.filter(t => t.importado && t.importBatchId).map(t => t.importBatchId)
-    ));
-    const importReports = lastImportReport ? [lastImportReport] : [];
-    const data = {
-      trans,
-      cards,
-      contas,
-      metas,
-      pessoas,
-      dividas,
-      despPess,
-      cats,
-      params: {
-        ...params,
-        autoCategoryRules: Array.isArray(params?.autoCategoryRules) ? params.autoCategoryRules : [],
-      },
-      saldosIniciais,
-      faturas,
-      simulacoes: sims,
-      sims, // compatibilidade com backups anteriores da própria aplicação
-      cofrinhos,
-      importReports,
-    };
-    const payload = {
-      app: "Financas PRO",
-      version: LS_VERSION,
-      backupSchemaVersion: BACKUP_SCHEMA_VERSION,
-      exportedAt: new Date().toISOString(),
-      summary: {
-        transacoes: trans.length,
-        contas: contas.length,
-        cartoes: cards.length,
-        pessoas: pessoas.length,
-        simulacoes: sims.length,
-        cofrinhos: cofrinhos.length,
-        lotesImportados: importBatchIds.length,
-      },
-      data,
-      rawLocalStorage: getFinancasProStorageSnapshot(),
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href = url;
-    a.download = `financas-pro-backup-${new Date().toISOString().slice(0,10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+  // v0.3.38 Fase 3 — devolve true/false (em vez de void): handleSyncNow precisa
+  // saber se o backup automático de fato saiu antes de decidir sobrescrever
+  // dados locais. Callers antigos (botão "Exportar backup") ignoram o retorno
+  // sem quebrar nada.
+  const handleExport = useCallback(() => {
+    try {
+      const importBatchIds = Array.from(new Set(
+        trans.filter(t => t.importado && t.importBatchId).map(t => t.importBatchId)
+      ));
+      const importReports = lastImportReport ? [lastImportReport] : [];
+      const data = {
+        trans,
+        cards,
+        contas,
+        metas,
+        pessoas,
+        dividas,
+        despPess,
+        cats,
+        params: {
+          ...params,
+          autoCategoryRules: Array.isArray(params?.autoCategoryRules) ? params.autoCategoryRules : [],
+        },
+        saldosIniciais,
+        faturas,
+        simulacoes: sims,
+        sims, // compatibilidade com backups anteriores da própria aplicação
+        cofrinhos,
+        importReports,
+      };
+      const payload = {
+        app: "Financas PRO",
+        version: LS_VERSION,
+        backupSchemaVersion: BACKUP_SCHEMA_VERSION,
+        exportedAt: new Date().toISOString(),
+        summary: {
+          transacoes: trans.length,
+          contas: contas.length,
+          cartoes: cards.length,
+          pessoas: pessoas.length,
+          simulacoes: sims.length,
+          cofrinhos: cofrinhos.length,
+          lotesImportados: importBatchIds.length,
+        },
+        data,
+        rawLocalStorage: getFinancasProStorageSnapshot(),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url;
+      a.download = `financas-pro-backup-${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return true;
+    } catch (erro) {
+      console.error("[Financas PRO] handleExport:", erro);
+      return false;
+    }
+  }, [trans, cards, contas, metas, pessoas, dividas, despPess, cats, params, saldosIniciais, faturas, sims, cofrinhos, lastImportReport]);
+
+  // v0.3.38 Fase 1/3 — `stamp:false` em toda restauração de payload externo
+  // (backup local ou estado vindo do servidor): as datas de alteração já
+  // vêm carimbadas na origem e representam quando cada registro foi editado
+  // de verdade. Recarimbar aqui apagaria essa história e faria o payload
+  // restaurado parecer, para o merge da Fase 4, mais novo do que tudo que
+  // existe no outro dispositivo. Reaproveitado por handleImport (arquivo
+  // local) e por handleSyncNow (adoção do estado remoto).
+  const restoreBackupPayload = useCallback((data) => {
+    const semCarimbo = { stamp: false };
+    setTrans(data.trans, semCarimbo);
+    setCards(data.cards, semCarimbo);
+    setContas(data.contas, semCarimbo);
+    setMetas(data.metas, semCarimbo);
+    setPessoas(data.pessoas, semCarimbo);
+    setDividas(data.dividas, semCarimbo);
+    setDespPess(data.despPess, semCarimbo);
+    setCats(data.cats, semCarimbo);
+    setParams(data.params, semCarimbo);
+    setSaldosIniciais(data.saldosIniciais, semCarimbo);
+    setFaturas(data.faturas, semCarimbo);
+    setSims(data.simulacoes, semCarimbo);
+    setCofrinhos(data.cofrinhos, semCarimbo);
+  }, [setTrans, setCards, setContas, setMetas, setPessoas, setDividas, setDespPess, setCats, setParams, setSaldosIniciais, setFaturas, setSims, setCofrinhos]);
 
   const handleImport = (e) => {
     const file = e.target.files[0];
@@ -914,25 +960,7 @@ export default function App() {
         );
         if (!confirmed) return;
 
-        // v0.3.38 Fase 1 — `stamp:false` em toda a restauração: as datas de
-        // alteração vêm do arquivo de backup e representam quando cada
-        // registro foi editado de verdade. Recarimbar aqui apagaria essa
-        // história e faria o backup restaurado parecer, para o merge da Fase
-        // 4, mais novo do que tudo que existe no outro dispositivo.
-        const semCarimbo = { stamp: false };
-        setTrans(data.trans, semCarimbo);
-        setCards(data.cards, semCarimbo);
-        setContas(data.contas, semCarimbo);
-        setMetas(data.metas, semCarimbo);
-        setPessoas(data.pessoas, semCarimbo);
-        setDividas(data.dividas, semCarimbo);
-        setDespPess(data.despPess, semCarimbo);
-        setCats(data.cats, semCarimbo);
-        setParams(data.params, semCarimbo);
-        setSaldosIniciais(data.saldosIniciais, semCarimbo);
-        setFaturas(data.faturas, semCarimbo);
-        setSims(data.simulacoes, semCarimbo);
-        setCofrinhos(data.cofrinhos, semCarimbo);
+        restoreBackupPayload(data);
         setLastImportReport(data.importReports[0] || null);
         resetImport();
         alert("✅ Backup importado com sucesso! Os dados foram restaurados.");
@@ -944,6 +972,167 @@ export default function App() {
     reader.readAsText(file);
     e.target.value = "";
   };
+
+  // ── Sincronização (v0.3.38 Fase 3, DEC-0043) ────────────────────────────────
+  // Mesmo formato de payload de handleExport/normalizeBackupPayload (13 chaves
+  // de BACKUP_STORAGE_KEYS), montado a partir do estado React atual.
+  const buildSyncPayload = useCallback(() => ({
+    trans,
+    contas,
+    metas,
+    pessoas,
+    dividas,
+    despPess,
+    cards,
+    cats,
+    params: {
+      ...params,
+      autoCategoryRules: Array.isArray(params?.autoCategoryRules) ? params.autoCategoryRules : [],
+    },
+    saldosIniciais,
+    faturas,
+    simulacoes: sims,
+    cofrinhos,
+  }), [trans, contas, metas, pessoas, dividas, despPess, cards, cats, params, saldosIniciais, faturas, sims, cofrinhos]);
+
+  const handleSyncLogin = useCallback(async ({ email, password }) => {
+    const r = await signIn({ email, password });
+    if (!r.ok) {
+      pushToast({ message: "Login falhou. Confira email e senha da conta compartilhada.", tone: "coral" });
+    }
+    return r.ok;
+  }, [pushToast]);
+
+  const handleSyncLogout = useCallback(async () => {
+    await signOut();
+  }, []);
+
+  // v0.3.38 Fase 3 — payload remoto tem que trazer as 13 chaves esperadas
+  // antes de ser adotado. normalizeBackupPayload() é deliberadamente tolerante
+  // (aceita backup local antigo/parcial e preenche ausência com vazio) porque
+  // handleImport tem confirmação humana no meio. Adoção automática de estado
+  // remoto não pode herdar essa tolerância: um payload truncado ou gravado
+  // pela metade não pode apagar categorias/contas silenciosamente.
+  const payloadRemotoValido = (payload) =>
+    !!payload && typeof payload === "object" && BACKUP_STORAGE_KEYS.every(k => Object.prototype.hasOwnProperty.call(payload, k));
+
+  // Sem argumentos de propósito: é o mesmo gancho que a Fase 5 vai reaproveitar
+  // para os gatilhos automáticos (ao abrir o app, ao sair). Lê tudo do estado
+  // React via closure.
+  const handleSyncNow = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      pushToast({ message: "Sincronização não configurada nesta build.", tone: "coral" });
+      return;
+    }
+    if (!syncSession) {
+      pushToast({ message: "Faça login para sincronizar.", tone: "coral" });
+      return;
+    }
+    if (!String(usuario || "").trim()) {
+      // RN034/RN035 — a conta do Supabase é compartilhada; sem `usuario`
+      // preenchido não existe atribuição de autoria, e a sincronização fica
+      // bloqueada de propósito.
+      pushToast({ message: "Preencha sua identificação em Parâmetros → Geral antes de sincronizar.", tone: "coral" });
+      return;
+    }
+    if (syncing) return;
+
+    setSyncing(true);
+    try {
+      const pull = await pullEstado();
+      if (!pull.ok) {
+        pushToast({ message: "Falha ao conectar ao servidor. Nada foi alterado localmente.", tone: "coral" });
+        return;
+      }
+
+      const payload = buildSyncPayload();
+
+      if (!pull.existe) {
+        // Ninguém sincronizou ainda: este dispositivo vira a base (D9).
+        const push = await pushEstado({ payload, usuario, versaoEsperada: null });
+        if (push.ok) {
+          setSyncEstado({ versao: push.versao, sincronizadoEm: push.atualizadoEm });
+          pushToast({ message: `Sincronizado (versão ${push.versao}).`, tone: "emerald" });
+        } else if (push.motivo === "conflito") {
+          const backupOk = handleExport();
+          pushToast({
+            message: backupOk
+              ? "Outro dispositivo sincronizou primeiro. Backup baixado — sincronize de novo."
+              : "Outro dispositivo sincronizou primeiro, e o backup automático falhou. Exporte manualmente antes de sincronizar de novo.",
+            tone: "gold", durationMs: 9000,
+          });
+        } else {
+          pushToast({ message: "Falha ao sincronizar. Nada foi alterado localmente.", tone: "coral" });
+        }
+        return;
+      }
+
+      if (syncEstado.versao == null) {
+        // Servidor já tem estado, mas este dispositivo nunca sincronizou: não
+        // há ancestral comum e a Fase 4 (merge de três vias) ainda não existe.
+        // Adota o remoto — é a única sobrescrita cega deste fluxo, por isso as
+        // três guardas abaixo: payload validado, confirmação humana e backup
+        // confirmado antes de tocar em qualquer chave local.
+        if (!payloadRemotoValido(pull.payload)) {
+          pushToast({ message: "O estado do servidor está incompleto ou corrompido. Nada foi alterado localmente — avise antes de continuar usando a sincronização.", tone: "coral", durationMs: 12000 });
+          return;
+        }
+        const confirmado = window.confirm(
+          "O outro dispositivo já sincronizou dados e este nunca sincronizou antes. " +
+          "Os dados deste navegador serão substituídos pelos do servidor (um backup será baixado antes). Continuar?"
+        );
+        if (!confirmado) return;
+
+        const backupOk = handleExport();
+        if (!backupOk) {
+          pushToast({ message: "Backup automático falhou. Sincronização cancelada — nada foi alterado localmente.", tone: "coral", durationMs: 9000 });
+          return;
+        }
+
+        const falhasGravacao = [];
+        const registrarFalha = (e) => falhasGravacao.push(e.detail?.key);
+        window.addEventListener("fpro:persist-error", registrarFalha);
+        try {
+          restoreBackupPayload(normalizeBackupPayload(pull.payload));
+          // Cede um tick para o React processar as gravações em fila do useLS
+          // antes de decidir se o carimbo de "sincronizado" pode ser gravado.
+          await Promise.resolve();
+        } finally {
+          window.removeEventListener("fpro:persist-error", registrarFalha);
+        }
+        if (falhasGravacao.length > 0) {
+          pushToast({ message: `Falha ao gravar localmente (${falhasGravacao.join(", ")}). Recarregue a página e sincronize de novo antes de continuar.`, tone: "coral", durationMs: 12000 });
+          return;
+        }
+
+        setSyncEstado({ versao: pull.versao, sincronizadoEm: pull.atualizadoEm });
+        pushToast({ message: `Dados do outro dispositivo aplicados (versão ${pull.versao}). Seus dados anteriores foram salvos em backup.`, tone: "gold", durationMs: 9000 });
+        return;
+      }
+
+      const push = await pushEstado({ payload, usuario, versaoEsperada: syncEstado.versao });
+      if (push.ok) {
+        setSyncEstado({ versao: push.versao, sincronizadoEm: push.atualizadoEm });
+        pushToast({ message: `Sincronizado (versão ${push.versao}).`, tone: "emerald" });
+      } else if (push.motivo === "conflito") {
+        const backupOk = handleExport();
+        pushToast({
+          message: backupOk
+            ? "Recusado: outro dispositivo salvou uma versão mais nova. Backup baixado — nada foi perdido. Reconcilie manualmente por ora (a mescla automática chega na Fase 4)."
+            : "Recusado: outro dispositivo salvou uma versão mais nova. O backup automático falhou — exporte manualmente antes de tentar de novo. Nada local foi alterado.",
+          tone: "gold",
+          durationMs: 9000,
+        });
+      } else {
+        pushToast({ message: "Falha ao sincronizar. Nada foi alterado localmente.", tone: "coral" });
+      }
+    } catch (erro) {
+      pushToast({ message: "Falha inesperada ao sincronizar. Nada foi alterado localmente.", tone: "coral" });
+      console.error("[Financas PRO] handleSyncNow:", erro);
+    } finally {
+      setSyncing(false);
+    }
+  }, [syncSession, usuario, syncing, syncEstado, buildSyncPayload, handleExport, restoreBackupPayload, pushToast, setSyncEstado]);
 
   const handleReset = () => {
     const emptyState = {
@@ -969,6 +1158,12 @@ export default function App() {
     // esta linha o campo sumiria do LocalStorage mas continuaria em memória, e
     // a divergência só apareceria no próximo reload.
     lsSave("usuario", usuario);
+    // v0.3.38 Fase 3 — mesmo raciocínio para o metadado de sincronismo: sem
+    // isto, "Apagar dados financeiros" tem resultado diferente dependendo de
+    // haver reload depois (ver DEC-0043). Preservar mantém o reset como uma
+    // mudança local comum, sujeita à trava otimista normal do próximo sync —
+    // a propagação explícita do reset ao servidor fica para a Fase 5.
+    lsSave("syncEstado", syncEstado);
 
     setTrans(emptyState.trans);
     setCards(emptyState.cards);
@@ -1817,7 +2012,7 @@ export default function App() {
         )}
 
         {/* PARÂMETROS */}
-        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} reassignAndDeleteCard={reassignAndDeleteCard} reassignAndDeleteAccount={reassignAndDeleteAccount} recategorizeWholeCat={recategorizeWholeCat} reassignReasonMsg={REASSIGN_REASON_MSG} onExport={handleExport} onImport={handleImport} onReset={handleReset} usuario={usuario} setUsuario={setUsuario}/>}
+        {tab==="parametros"&&<ParamsTab cats={cats} params={params} setParams={setParams} flatCats={flatCats} addRootCat={addRootCat} addSubCat={addSubCat} delCat={delCat} renameCat={renameCat} recolorCat={recolorCat} cards={cards} setCards={setCards} contas={contas} setContas={setContas} cardDependents={cardDependents} contaDependents={contaDependents} reassignAndDeleteCard={reassignAndDeleteCard} reassignAndDeleteAccount={reassignAndDeleteAccount} recategorizeWholeCat={recategorizeWholeCat} reassignReasonMsg={REASSIGN_REASON_MSG} onExport={handleExport} onImport={handleImport} onReset={handleReset} usuario={usuario} setUsuario={setUsuario} isSupabaseConfigured={isSupabaseConfigured} syncSession={syncSession} syncing={syncing} syncEstado={syncEstado} onSyncLogin={handleSyncLogin} onSyncLogout={handleSyncLogout} onSyncNow={handleSyncNow}/>}
 
     </AppShell>
   );

@@ -1416,17 +1416,43 @@ script** — motivo pelo qual esta fase só foi marcada como entregue depois da 
    `current_user` não virou quem devia — transforma "sucesso indevido e silencioso" em
    erro visível, caso o mesmo problema se repita.
 
-#### Fase 3 — Trava otimista (risco médio)
+#### Fase 3 — Trava otimista (risco médio) — ENTREGUE 2026-08-18
 
-- [ ] Enviar payload mais versão esperada; servidor aceita e incrementa, ou recusa.
-- [ ] Na recusa: aviso claro, backup baixado, nada descartado.
-- [ ] Falha de rede nunca impede o uso local nem a gravação local, e nunca é
+- [x] Enviar payload mais versão esperada; servidor aceita e incrementa, ou recusa.
+- [x] Na recusa: aviso claro, backup baixado, nada descartado.
+- [x] Falha de rede nunca impede o uso local nem a gravação local, e nunca é
   silenciosa.
 - **Ao fim desta fase já existe sincronização utilizável e sem perda silenciosa.** O
   merge da Fase 4 é conforto, não correção — se o projeto parar aqui, o resultado
   ainda é melhor que hoje.
 - Aceite: dois navegadores convergem; o segundo a salvar é recusado com mensagem
   compreensível e sai com backup na mão.
+
+**O que existe:** `src/services/supabaseClient.js` e `src/services/syncService.js` (novos, sem React,
+18 testes em `tests/syncService.test.js`), `src/hooks/useSupabaseSession.js`, e o wiring em `src/App.jsx`
+(`syncEstado`, `buildSyncPayload`, `handleSyncNow`, `restoreBackupPayload` extraída de `handleImport`).
+Nova seção "🔄 Sincronização" em `ParamsTab.jsx`: login manual (D8), status da última sincronização, botão
+"Sincronizar agora". `DEC-0043` registra as decisões e o round de revisão do `guardiao-localstorage`.
+
+**Escopo desta fase é só o botão manual.** Os gatilhos automáticos "ao abrir/ao sair" (D6) continuam na
+Fase 5 — `handleSyncNow` foi escrito sem argumentos de propósito, para ser o mesmo gancho que a Fase 5
+vai reaproveitar sem reescrever a lógica de decisão.
+
+**Três decisões de implementação além do que a fase pedia, detalhadas na `DEC-0043`:** dispositivo que
+nunca sincronizou e encontra estado remoto adota o remoto em vez de travar sem solução (não há ancestral
+comum e a Fase 4/merge não existe ainda); backup automático só dispara em recusa por conflito ou em
+adoção, não em todo sync bem-sucedido; e seis correções exigidas pela revisão de persistência antes de
+fechar a fase — confirmação humana antes de sobrescrever dados locais com o remoto, validação estrita do
+payload remoto (as 13 chaves esperadas, sem a tolerância que `handleImport` usa para backup antigo),
+verificação de que o backup automático de fato saiu antes de prosseguir, `syncEstado` só é gravado depois
+de confirmar que as 13 escritas locais persistiram, `catch` geral no fluxo (uma exceção não tratada não
+pode mais parar o spinner em silêncio), e `handleReset` voltando a preservar `syncEstado` como já fazia
+com `usuario`.
+
+**Validado no navegador nesta sessão:** a seção renderiza, login com credenciais erradas faz o round-trip
+real ao Supabase (erro 400 do servidor) e mostra o toast de erro correto, sem exceção não tratada.
+**Não validado nesta sessão** (dependem da senha da conta compartilhada, que este agente não tem e não
+deve ter, D8): login com a conta real e convergência de fato entre dois navegadores.
 
 #### Fase 4 — Merge assistido de três vias (RISCO ALTO — o coração do projeto)
 

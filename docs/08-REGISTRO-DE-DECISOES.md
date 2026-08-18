@@ -2560,3 +2560,89 @@ reversível de graça — mas o formato de `payload` é o do backup, que já exi
 
 A `service_role key` do painel ignora RLS por construção. Ela não entra no repositório, não entra no
 `.env.local` e não entra no Vercel. O único lugar em que ela existe é o painel do Supabase.
+
+## DEC-0043 — Cliente da trava otimista: botão manual, adoção sem ancestral, e validação antes de sobrescrever
+
+Data: 2026-08-18
+
+### Contexto
+
+A Fase 3 pedia uma frase do roadmap: "enviar payload mais versão esperada; servidor aceita e incrementa, ou
+recusa; na recusa, aviso claro e backup baixado; falha de rede nunca é silenciosa." A mecânica de servidor já
+estava pronta desde a `DEC-0042` (a trava é a cláusula `where` do `update`). Faltava o lado cliente, e
+escrevê-lo exigiu decidir três coisas que a frase não cobria, mais um round de revisão do `guardiao-localstorage`
+que encontrou riscos reais de perda silenciosa no desenho inicial.
+
+### Decisão
+
+**1. Botão manual "Sincronizar agora" nesta fase; os gatilhos automáticos (abrir/sair) ficam para a Fase 5.**
+
+O roadmap já separava os dois (D6 é item da Fase 5), mas sem nenhum gatilho o critério de aceite da Fase 3
+("dois navegadores convergem") não seria testável. `handleSyncNow` foi escrito sem argumentos, lendo tudo do
+estado React via closure, exatamente para ser o gancho que a Fase 5 reaproveita em `useEffect`/`beforeunload`
+sem reescrever a lógica de decisão.
+
+**2. Sem ancestral comum e sem merge (Fase 4 não existe ainda), um dispositivo que nunca sincronizou e
+encontra estado remoto adota o remoto, em vez de travar sem solução.**
+
+Alternativa mais conservadora seria recusar sempre e obrigar reconciliação manual via export/import. Rejeitada
+porque isso descreveria formalmente qualquer segundo dispositivo sincronizando pela primeira vez como
+"conflito", tornando o botão inútil no caso mais comum de uso real (o outro notebook nunca sincronizou ainda).
+A adoção é a única sobrescrita cega deste desenho, e por isso carrega três guardas (ver decisão 4).
+
+**3. Backup automático (`handleExport`) só dispara nos dois casos que alteram ou arriscam alterar dado local
+(recusa por conflito, adoção do remoto) — não em todo sync bem-sucedido**, já que nesse caso nada é
+descartado.
+
+**4. Revisão do `guardiao-localstorage` bloqueou a primeira versão do fluxo e exigiu seis
+correções antes de fechar a fase:**
+
+| # | Risco encontrado | Correção aplicada |
+|---|---|---|
+| 1 | `handleReset` ("Apagar dados financeiros") apagava `syncEstado` sem regravar, com dois resultados opostos dependendo de haver reload depois | `syncEstado` passou a ser regravado após `clearFinancasProStorage()`, no mesmo padrão já usado para `usuario` |
+| 2 | `handleSyncNow` só tinha `finally`, sem `catch`: uma exceção de `normalizeBackupPayload` (payload remoto malformado) virava rejeição não tratada, sem toast, com o spinner simplesmente parando | `catch` geral com toast de falha e `console.error`, cobrindo qualquer exceção do fluxo |
+| 3 | Adoção do remoto substituía as 13 chaves sem confirmação humana, ao contrário de `handleImport` (que pede `window.confirm`) | `window.confirm` explícito antes da adoção, mesmo padrão do import de arquivo |
+| 4 | `handleExport` não informava se o download de fato saiu; a adoção prosseguia e o toast afirmava "backup salvo" sem verificação | `handleExport` passou a devolver `true`/`false` (try/catch); a adoção aborta se o backup falhar |
+| 5 | `normalizeBackupPayload` é deliberadamente tolerante (aceita backup antigo/parcial) porque `handleImport` tem confirmação humana no meio; a adoção automática herdava essa tolerância e podia zerar categorias/contas a partir de um payload remoto truncado | Validação estrita antes de normalizar: o payload remoto precisa ter as 13 chaves de `BACKUP_STORAGE_KEYS` presentes, senão a adoção é recusada com aviso, sem tocar em nada local |
+| 6 | `syncEstado` podia ser carimbado como "sincronizado com a versão N" antes de as 13 gravações do `useLS` terem de fato persistido (falha de cota no meio, por exemplo) | Ouvinte local do evento `fpro:persist-error` durante a restauração (sem usar `onPersistError`, que é um singleton global já ocupado pelo banner do app); se qualquer chave falhar, `syncEstado` não é gravado |
+
+**Aceito como limitação registrada, não corrigido nesta fase:** `handleImport` (restaurar backup de arquivo)
+não invalida `syncEstado`. Cenário: dispositivo sincronizado na versão 5 restaura um backup antigo e sincroniza
+de novo — o `update` vai com `versaoEsperada:5`, o servidor aceita, e o conteúdo antigo sobrescreve o servidor
+sem que nenhum conflito seja detectado (o outro dispositivo recebe recusa e backup na próxima tentativa dele, então
+nada é irrecuperável, mas a substituição do servidor acontece sem aviso). A correção de `handleReset` (item 1
+da tabela) era pré-requisito para essa decisão, porque a Fase 5 vai precisar de um `syncEstado` confiável para
+decidir o que fazer aqui. Fica para quando a Fase 5 (ou uma decisão explícita antes dela) definir a semântica
+completa de import/reset frente à sincronização.
+
+### O que mudou
+
+- `package.json`: `@supabase/supabase-js` fixado em `2.112.3` (não `latest` — a lib tem histórico de breaking
+  changes entre minors).
+- `src/services/supabaseClient.js` (novo): client singleton; `isSupabaseConfigured` sinaliza ausência de
+  env vars sem quebrar build/teste.
+- `src/services/syncService.js` (novo, sem React, testável por injeção de client): `signIn`, `signOut`,
+  `getSessaoAtual`, `assinarMudancaSessao`, `pullEstado`, `pushEstado`. Nenhuma função lança exceção não
+  tratada — toda falha vira `{ok:false, motivo}`.
+- `src/hooks/useSupabaseSession.js` (novo): ponte React fina para a sessão.
+- `src/App.jsx`: `syncEstado` (novo, fora do backup, mesmo padrão de `usuario`), `restoreBackupPayload`
+  extraída de `handleImport` e reaproveitada pela adoção remota, `buildSyncPayload`, `handleSyncLogin`,
+  `handleSyncLogout`, `handleSyncNow` (com as seis correções da tabela acima), `handleExport` agora retorna
+  `true`/`false`.
+- `src/components/organisms/ParamsTab.jsx`: seção "🔄 Sincronização" — login, status, botão "Sincronizar
+  agora", tudo via `pushToast` (não `alert`).
+- `tests/syncService.test.js` (novo): 18 testes cobrindo pull/push (aceite, conflito por versão, conflito por
+  insert duplicado, erro de rede, erro de permissão) e auth, com client Supabase falso — sem rede real.
+
+### Verificação
+
+`npm test`: 240 testes (222 anteriores + 18 novos), sem regressão. `npx eslint .`: 0 erros, 8 warnings (a
+mesma baseline pré-existente do backlog, nenhum novo). Validado manualmente no navegador: a seção renderiza,
+login com credenciais inválidas dispara round-trip real ao Supabase (erro 400) e o toast de erro correto,
+sem exceção não tratada. **Não validado nesta sessão:** login com a conta real e convergência entre dois
+navegadores — dependem da senha da conta compartilhada (D8), que este agente não tem nem deve ter.
+
+### Reversibilidade
+
+**Alta.** Nenhuma mudança de formato de dado, nenhuma chave nova entra no backup. Reverter é remover os
+arquivos novos, a seção de `ParamsTab` e o wiring de `App.jsx`; o schema do servidor (Fase 2) não muda.

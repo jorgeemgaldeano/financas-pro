@@ -10,8 +10,10 @@ import { CategorySelect } from "../molecules/CategorySelect.jsx";
 import { catColor, catIcon } from "../../utils/categoryTreeUtils.js";
 import { getCardPaymentAccountId } from "../../services/cardInvoiceService.js";
 import { INIT_PARAMS } from "../../constants/seedData.js";
-export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, reassignAndDeleteCard, reassignAndDeleteAccount, recategorizeWholeCat, reassignReasonMsg, onExport, onImport, onReset, usuario, setUsuario }) {
+export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSubCat, delCat, renameCat, recolorCat, cards, setCards, contas, setContas, cardDependents, contaDependents, reassignAndDeleteCard, reassignAndDeleteAccount, recategorizeWholeCat, reassignReasonMsg, onExport, onImport, onReset, usuario, setUsuario, isSupabaseConfigured, syncSession, syncing, syncEstado, onSyncLogin, onSyncLogout, onSyncNow }) {
   const [section, setSection] = useState("cats");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginSenha, setLoginSenha] = useState("");
   const [paramsBuf, setParamsBuf] = useState({...params});
   const [newCat, setNewCat] = useState({ nome:"", cor:"#B0BEC5", icon:"📦" });
   const [newSubForm, setNewSubForm] = useState({});
@@ -136,7 +138,7 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
       />
 
       <div style={{ display:"flex", gap:4 }}>
-        {[{id:"cats",l:"🏷️ Categorias"},{id:"auto",l:"🤖 Autocategorização"},{id:"cards",l:"💳 Cartões"},{id:"contas",l:"🏦 Contas"},{id:"geral",l:"⚙️ Geral"},{id:"dados",l:"💿 Dados"}].map(s=>(
+        {[{id:"cats",l:"🏷️ Categorias"},{id:"auto",l:"🤖 Autocategorização"},{id:"cards",l:"💳 Cartões"},{id:"contas",l:"🏦 Contas"},{id:"geral",l:"⚙️ Geral"},{id:"sync",l:"🔄 Sincronização"},{id:"dados",l:"💿 Dados"}].map(s=>(
           <button key={s.id} onClick={()=>setSection(s.id)} style={{ background:section===s.id?C.border:"transparent", border:"none", color:section===s.id?C.text:C.soft, padding:"8px 16px", borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>{s.l}</button>
         ))}
       </div>
@@ -367,6 +369,59 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
             )}
           </div>
         </div>
+        </div>
+      )}
+
+      {section==="sync"&&(
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={card2()}>
+            <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>Sincronização entre dispositivos</div>
+            <div style={{ fontSize:12, color:C.soft, marginBottom:14 }}>
+              Envia e recebe seus dados financeiros de uma conta compartilhada no servidor. A trava
+              impede que um dispositivo apague sem querer o trabalho do outro: se alguém já sincronizou
+              uma versão mais nova, a sincronização é recusada e um backup deste dispositivo é baixado
+              automaticamente antes de qualquer decisão.
+            </div>
+
+            {!isSupabaseConfigured && (
+              <div style={{ fontSize:13, color:C.gold, background:C.gold+"11", padding:"10px 14px", borderRadius:8 }}>
+                Sincronização não configurada nesta build (variáveis VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY ausentes).
+              </div>
+            )}
+
+            {isSupabaseConfigured && !syncSession && (
+              <form
+                onSubmit={e=>{ e.preventDefault(); onSyncLogin({ email: loginEmail, password: loginSenha }); }}
+                style={{ display:"flex", flexDirection:"column", gap:8, maxWidth:320 }}
+              >
+                <div>
+                  <div style={lbl2}>Email da conta compartilhada</div>
+                  <input style={inp2} type="email" autoComplete="username" value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} required/>
+                </div>
+                <div>
+                  <div style={lbl2}>Senha</div>
+                  <input style={inp2} type="password" autoComplete="current-password" value={loginSenha} onChange={e=>setLoginSenha(e.target.value)} required/>
+                </div>
+                <button type="submit" style={btn2(C.emerald,{ alignSelf:"flex-start" })}>Entrar</button>
+              </form>
+            )}
+
+            {isSupabaseConfigured && syncSession && (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                <div style={{ fontSize:13, color:C.soft }}>Conectado como <strong style={{ color:C.text }}>{syncSession.user?.email}</strong></div>
+                <div style={{ fontSize:13, color:C.soft }}>
+                  Última sincronização: {syncEstado?.sincronizadoEm ? new Date(syncEstado.sincronizadoEm).toLocaleString("pt-BR") : "nunca"}
+                  {" · "}Versão conhecida: {syncEstado?.versao ?? "—"}
+                </div>
+                <div style={{ display:"flex", gap:10 }}>
+                  <button onClick={onSyncNow} disabled={syncing} style={btn2(C.emerald,{ opacity:syncing?0.6:1, cursor:syncing?"default":"pointer" })}>
+                    {syncing ? "Sincronizando…" : "🔄 Sincronizar agora"}
+                  </button>
+                  <button onClick={onSyncLogout} style={ghost2()}>Sair</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
