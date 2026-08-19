@@ -14,7 +14,9 @@ import { useLS, lsSave, onPersistError } from "./hooks/useLocalStorage.js";
 import { setStampUser } from "./services/recordStamp.js";
 import { useTransactionsStorage } from "./hooks/useTransactionsStorage.js";
 import { isSupabaseConfigured } from "./services/supabaseClient.js";
-import { signIn, signOut, pullEstado, pushEstado } from "./services/syncService.js";
+import { signIn, signOut, pullEstado, pushEstado, pullAncestral } from "./services/syncService.js";
+import { mergeTresVias, finalizarMerge } from "./services/mergeService.js";
+import { SyncConflictModal } from "./components/ui/SyncConflictModal.jsx";
 import { useSupabaseSession } from "./hooks/useSupabaseSession.js";
 import { fmtBRL, moneyToNumber } from "./utils/moneyUtils.js";
 import { addMonthsToDate, dateForMonthDay, fmtDate, formatMonthBR, mKey, MONTHS, monthCompare, monthOffset, todayMonthKey } from "./utils/dateUtils.js";
@@ -254,6 +256,9 @@ export default function App() {
   const [syncEstado, setSyncEstado] = useLS("syncEstado", { versao: null, sincronizadoEm: null });
   const [syncing, setSyncing] = useState(false);
   const { session: syncSession } = useSupabaseSession();
+  // v0.3.38 Fase 4 — { conflitos, preliminar, versaoRemota, erro } enquanto o
+  // usuário resolve o merge de três vias; null quando não há conflito aberto.
+  const [syncConflito, setSyncConflito] = useState(null);
   const [selMonth, setSelMonth] = useState(todayMonthKey());
   const [modal,    setModal]    = useState(null);
   const [form,     setForm]     = useState({});
@@ -1016,6 +1021,117 @@ export default function App() {
   const payloadRemotoValido = (payload) =>
     !!payload && typeof payload === "object" && BACKUP_STORAGE_KEYS.every(k => Object.prototype.hasOwnProperty.call(payload, k));
 
+  // v0.3.38 Fase 4 (DEC-0044/DEC-0045) — mesmo texto de recusa que a Fase 3 já
+  // usava, reaproveitado para os dois motivos de degradação silenciosa
+  // (decisão 3 da DEC-0044): ancestral indisponível (expurgado pela retenção
+  // de 100 versões) e payload estruturalmente inconsistente (mergeTresVias
+  // recusou). Nenhum dos dois ganha mensagem diferenciada.
+  const recusarComoFase3 = useCallback(() => {
+    const backupOk = handleExport();
+    pushToast({
+      message: backupOk
+        ? "Recusado: outro dispositivo salvou uma versão mais nova. Backup baixado — nada foi perdido. Reconcilie manualmente por ora."
+        : "Recusado: outro dispositivo salvou uma versão mais nova. O backup automático falhou — exporte manualmente antes de tentar de novo. Nada local foi alterado.",
+      tone: "gold",
+      durationMs: 9000,
+    });
+  }, [handleExport, pushToast]);
+
+  // Aplica um merge já resolvido (sem conflitos, ou com todas as escolhas do
+  // usuário): finalizarMerge valida escolhas e invariantes financeiros antes
+  // de liberar; só então backup, gravação local e envio ao servidor. Devolve
+  // { ok, erro? } para o chamador decidir se fecha o modal de conflito.
+  const aplicarMergeResolvido = useCallback(async ({ preliminar, conflitos, escolhas, versaoRemota }) => {
+    let final;
+    try {
+      final = finalizarMerge({ preliminar, conflitos, escolhas });
+    } catch (erro) {
+      // aplicarEscolhas lança se alguma escolha faltar/for inválida — não
+      // deveria acontecer vindo do modal (que só libera o botão com todas
+      // preenchidas), mas não deve travar a sessão se acontecer.
+      return { ok: false, erro: erro.message };
+    }
+    if (!final.ok) {
+      if (final.motivo === "invariante_financeira_violada") {
+        return {
+          ok: false,
+          erro: "A mesclagem automática deixaria os dados financeiramente inconsistentes e foi bloqueada. Nada foi alterado — revise manualmente e sincronize de novo.",
+        };
+      }
+      return { ok: false, erro: "Ainda há divergências pendentes de resolução." };
+    }
+
+    const backupOk = handleExport();
+    if (!backupOk) {
+      pushToast({ message: "Backup automático falhou. Reconciliação cancelada — nada foi alterado localmente.", tone: "coral", durationMs: 9000 });
+      return { ok: false, erro: null };
+    }
+
+    const falhasGravacao = [];
+    const registrarFalha = (e) => falhasGravacao.push(e.detail?.key);
+    window.addEventListener("fpro:persist-error", registrarFalha);
+    try {
+      restoreBackupPayload(normalizeBackupPayload(final.payload));
+      await Promise.resolve();
+    } finally {
+      window.removeEventListener("fpro:persist-error", registrarFalha);
+    }
+    if (falhasGravacao.length > 0) {
+      pushToast({ message: `Falha ao gravar localmente (${falhasGravacao.join(", ")}). Recarregue a página e sincronize de novo antes de continuar.`, tone: "coral", durationMs: 12000 });
+      return { ok: false, erro: null };
+    }
+
+    const push = await pushEstado({ payload: final.payload, usuario, versaoEsperada: versaoRemota });
+    if (push.ok) {
+      setSyncEstado({ versao: push.versao, sincronizadoEm: push.atualizadoEm });
+      pushToast({ message: `Conflito reconciliado e sincronizado (versão ${push.versao}).`, tone: "emerald" });
+    } else if (push.motivo === "conflito") {
+      // Raro (uso caracterizado do projeto: casal, mesma casa, quase sempre
+      // online) — outro dispositivo sincronizou de novo durante a
+      // reconciliação. O merge já foi aplicado localmente com backup, então
+      // nada foi perdido; só falta reenviar.
+      pushToast({ message: "Outro dispositivo sincronizou de novo enquanto você reconciliava. Seus dados locais já foram atualizados e um backup foi salvo — sincronize novamente para enviar.", tone: "gold", durationMs: 9000 });
+    } else {
+      pushToast({ message: "Reconciliação aplicada localmente, mas falhou ao enviar ao servidor. Sincronize novamente.", tone: "coral", durationMs: 9000 });
+    }
+    return { ok: true };
+  }, [handleExport, restoreBackupPayload, usuario, pushToast, setSyncEstado]);
+
+  // Busca o remoto atual e o ancestral comum (a versão que este dispositivo
+  // tinha carregado antes de editar) e mescla. Sem conflitos, aplica sozinho;
+  // com conflitos, abre o modal de resumo por chave (DEC-0044 decisão 2).
+  const resolverConflitoDeSincronizacao = useCallback(async (local) => {
+    const fresco = await pullEstado();
+    if (!fresco.ok || !fresco.existe) { recusarComoFase3(); return; }
+
+    const ancestral = await pullAncestral(syncEstado.versao);
+    if (!ancestral.ok || !ancestral.existe) { recusarComoFase3(); return; }
+
+    const merge = mergeTresVias({ local, remoto: fresco.payload, ancestral: ancestral.payload });
+    if (!merge.ok) { recusarComoFase3(); return; }
+
+    if (merge.conflitos.length === 0) {
+      await aplicarMergeResolvido({ preliminar: merge.preliminar, conflitos: [], escolhas: undefined, versaoRemota: fresco.versao });
+      return;
+    }
+
+    setSyncConflito({ conflitos: merge.conflitos, preliminar: merge.preliminar, versaoRemota: fresco.versao, erro: null });
+  }, [syncEstado, recusarComoFase3, aplicarMergeResolvido]);
+
+  const handleSyncConflitoConfirmar = useCallback(async (escolhas) => {
+    if (!syncConflito) return;
+    const r = await aplicarMergeResolvido({
+      preliminar: syncConflito.preliminar, conflitos: syncConflito.conflitos, escolhas, versaoRemota: syncConflito.versaoRemota,
+    });
+    if (r.ok) setSyncConflito(null);
+    else if (r.erro) setSyncConflito(prev => (prev ? { ...prev, erro: r.erro } : prev));
+  }, [syncConflito, aplicarMergeResolvido]);
+
+  const handleSyncConflitoCancelar = useCallback(() => {
+    setSyncConflito(null);
+    recusarComoFase3();
+  }, [recusarComoFase3]);
+
   // Sem argumentos de propósito: é o mesmo gancho que a Fase 5 vai reaproveitar
   // para os gatilhos automáticos (ao abrir o app, ao sair). Lê tudo do estado
   // React via closure.
@@ -1115,14 +1231,10 @@ export default function App() {
         setSyncEstado({ versao: push.versao, sincronizadoEm: push.atualizadoEm });
         pushToast({ message: `Sincronizado (versão ${push.versao}).`, tone: "emerald" });
       } else if (push.motivo === "conflito") {
-        const backupOk = handleExport();
-        pushToast({
-          message: backupOk
-            ? "Recusado: outro dispositivo salvou uma versão mais nova. Backup baixado — nada foi perdido. Reconcilie manualmente por ora (a mescla automática chega na Fase 4)."
-            : "Recusado: outro dispositivo salvou uma versão mais nova. O backup automático falhou — exporte manualmente antes de tentar de novo. Nada local foi alterado.",
-          tone: "gold",
-          durationMs: 9000,
-        });
+        // v0.3.38 Fase 4 — antes só recusava com backup; agora tenta o merge
+        // assistido de três vias, e só degrada para a recusa (recusarComoFase3)
+        // se o ancestral não existir mais ou o payload não bater estruturalmente.
+        await resolverConflitoDeSincronizacao(payload);
       } else {
         pushToast({ message: "Falha ao sincronizar. Nada foi alterado localmente.", tone: "coral" });
       }
@@ -1132,7 +1244,7 @@ export default function App() {
     } finally {
       setSyncing(false);
     }
-  }, [syncSession, usuario, syncing, syncEstado, buildSyncPayload, handleExport, restoreBackupPayload, pushToast, setSyncEstado]);
+  }, [syncSession, usuario, syncing, syncEstado, buildSyncPayload, handleExport, restoreBackupPayload, pushToast, setSyncEstado, resolverConflitoDeSincronizacao]);
 
   const handleReset = () => {
     const emptyState = {
@@ -1887,6 +1999,16 @@ export default function App() {
       openAddTrans={openAddTrans} btn={btn}
       overlays={<>
         <RequiredFieldModal info={requiredModal} onClose={()=>setRequiredModal(null)} />
+
+        {syncConflito && (
+          <SyncConflictModal
+            conflitos={syncConflito.conflitos}
+            erro={syncConflito.erro}
+            onConfirmar={handleSyncConflitoConfirmar}
+            onCancelar={handleSyncConflitoCancelar}
+            colors={C}
+          />
+        )}
 
         <ToastHost toasts={toasts} onDismiss={dismissToast} onUndo={(t)=>t.onUndo&&t.onUndo()} colors={C} />
 

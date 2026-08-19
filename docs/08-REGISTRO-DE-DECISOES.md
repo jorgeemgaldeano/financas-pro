@@ -2646,3 +2646,171 @@ navegadores — dependem da senha da conta compartilhada (D8), que este agente n
 
 **Alta.** Nenhuma mudança de formato de dado, nenhuma chave nova entra no backup. Reverter é remover os
 arquivos novos, a seção de `ParamsTab` e o wiring de `App.jsx`; o schema do servidor (Fase 2) não muda.
+
+## DEC-0044 — Fase 4: três decisões de desenho do merge assistido, antes do código
+
+Data: 2026-08-18
+
+### Contexto
+
+O roadmap descreve a mecânica do merge de três vias (auto-resolver o que só um lado mudou, apresentar para
+escolha o que os dois mudaram, mostrando `updatedAt` e `usuario`) mas deixa em aberto três pontos de desenho
+que o código precisa fixar antes de existir: como decidir quando os dois lados mudaram, como apresentar isso
+na tela, e o que fazer quando o ancestral comum não está mais disponível (expurgado pela retenção de 100
+versões do `estado_versoes`, `DEC-0042`). Jorge confirmou as três antes do início da implementação.
+
+### Decisão
+
+**1. Conflito real (os dois lados alteraram o mesmo item para valores diferentes) nunca se resolve sozinho
+por data mais recente — sempre vira decisão do usuário.**
+
+Alternativa rejeitada: "last write wins" por `updatedAt`. Seria mais barato de implementar e resolveria a
+maioria dos casos sem interação, mas é exatamente o desenho que a `DEC-0039` já tinha afastado ao trocar
+merge contínuo por trava otimista — a garantia do projeto inteiro é "nunca perder dado sem o usuário ter
+escolhido" (critério de aceite da própria Fase 4, no roadmap). Decidir por data reintroduziria perda
+silenciosa pela porta dos fundos: quem salva por último vence, mesmo que a mudança do outro lado seja a que
+importava.
+
+**2. A tela de conflito mostra resumo por chave** (ex.: "3 lançamentos em conflito", "1 divergência em
+metas"), não item a item expandido por padrão.
+
+Alternativa considerada: lado a lado, valor antes/depois de cada item já visível de cara. Descartada como
+padrão porque a maioria das sincronizações reais (uso doméstico, mesma casa) deve gerar zero ou poucos
+conflitos — abrir uma lista longa e detalhada por padrão pune o caso comum para servir o raro. O detalhe por
+item (valores dos dois lados, `updatedAt`/`usuario`) continua existindo, mas atrás de expandir a chave
+resumida.
+
+**3. Ancestral indisponível (expurgado pela retenção de 100 versões) degrada silenciosamente para o
+comportamento da Fase 3** — mesma mensagem de recusa + backup que já existe hoje, sem aviso adicional
+explicando o motivo.
+
+Alternativa considerada: mensagem diferenciada ("não foi possível reconciliar automaticamente, motivo:
+histórico expirado"). Descartada por ora — o cenário exige um dispositivo ficar mais de 100 sincronizações
+alheias atrás, o que não bate com o uso caracterizado do projeto (casal, mesma casa, mesma rede, quase sempre
+online). Tratar como caso raro que reaproveita a mensagem existente evita adicionar um texto novo para um
+caminho que não deve disparar na prática. Reavaliar se o comportamento real mostrar o contrário.
+
+### O que muda
+
+Ainda não implementado. Estas três decisões fixam o desenho antes do código de `mergeService.js` e do modal
+de conflito — ver o planejamento da Fase 4 na sessão de 2026-08-18.
+
+### Reversibilidade
+
+**Alta.** São decisões de desenho de uma função ainda não escrita — mudar de ideia depois de codar exige
+reescrever `mergeService.js` e a UI do modal, não o schema do servidor nem o formato de dado.
+
+---
+
+## DEC-0045 — Endurecimento do contrato de `mergeService.js` após revisão do guardiao-localstorage e do especialista-financas
+
+Data: 2026-08-18
+
+### Contexto
+
+Antes de ligar `mergeService.js` (Passo 1 da Fase 4, escrito com a bateria de testes original de 16 casos)
+ao restante do fluxo de sincronização, ele foi submetido aos dois agentes do próprio projeto responsáveis
+por esse tipo de risco: `guardiao-localstorage` (perda de dado/persistência) e `especialista-financas`
+(regra de negócio financeira). Os dois encontraram problemas reais, não hipotéticos, na primeira versão do
+módulo — nenhum deles no núcleo do algoritmo de três vias em si, mas no contrato ao redor dele.
+
+**Achados do `guardiao-localstorage` (bloqueantes):**
+
+1. Uma chave ausente ou de tipo divergente entre `local`/`remoto`/`ancestral` (ex.: um dispositivo com build
+   antiga que nunca teve `cofrinhos`, ou um payload remoto truncado) era lida como "o outro lado apagou
+   tudo de propósito" — a chave inteira sumia do resultado, sem nenhum conflito registrado.
+2. Um array com id duplicado, ou misturando registros com id e itens sem id, perdia itens silenciosamente
+   (`Map` por id descarta o penúltimo; item sem id nunca era reinserido).
+3. `definirNoCaminho` reconstruía o caminho de um conflito reparseando uma string com regex — um id ou
+   chave de mapa contendo `.`, `[` ou `]` corrompia a navegação e podia descartar a escolha do usuário
+   silenciosamente, aplicando o placeholder local mesmo quando o usuário tinha escolhido "remoto".
+4. `aplicarEscolhas` tratava qualquer valor de escolha que não fosse exatamente `"remoto"` (undefined, typo,
+   array mais curto que a lista de conflitos) como `"local"` — um conflito não respondido pela UI resolvia
+   sozinho, sem erro, na direção errada quando a intenção do usuário era a oposta.
+5. `mergeTresVias` devolvia um `resultado` com a mesma forma de um payload válido, mesmo com conflitos
+   pendentes — um dev escrevendo o Passo 3 (wiring em `App.jsx`) podia gravar esse `resultado` direto no
+   servidor achando que era o payload final, sobrescrevendo a edição do outro dispositivo sem que ninguém
+   visse um conflito.
+
+**Achado do `especialista-financas` (arquitetural, não bloqueante no módulo em si):** a granularidade de
+conflito por campo (necessária para o auto-resolve de "filhos diferentes do mesmo pai" já pedido no
+roadmap) permite que dois lados alterem campos financeiramente interdependentes do mesmo registro (ex.:
+`valor`/`valorPago`/`status` de uma transação, total de uma fatura fechada, soma de amortizações de uma
+dívida, saldo de um cofrinho, pernas de uma transferência) sem que o algoritmo genérico perceba a
+inconsistência resultante — nenhuma data envolvida, nenhuma regra de granularidade violada, mas o número
+final não fecha.
+
+### Decisão
+
+Endurecer o contrato de `mergeService.js` em vez de reverter a granularidade por campo (que quebraria o
+auto-resolve de aninhados que o roadmap pediu):
+
+1. `mergeTresVias` agora valida a consistência estrutural dos três payloads (mesmas chaves, mesmo formato
+   array/objeto, sem id duplicado, sem item sem id em array de registros) **antes** de mesclar, e recusa
+   (`{ok:false, motivo:"payload_invalido", problemas}`) em vez de adivinhar. O chamador (Passo 3, ainda por
+   escrever) deve tratar essa recusa exatamente como o caso "ancestral indisponível" já decidido na
+   `DEC-0044` (decisão 3): degradar para o comportamento da Fase 3, sem mensagem diferenciada.
+2. O caminho de um conflito passou de string reparseada para uma lista estruturada de segmentos
+   (`{tipo:"campo"|"registro", ...}`), resolvida sem regex. Um campo `rotulo` (string) continua existindo
+   só para exibição na UI, nunca para navegação.
+3. `aplicarEscolhas` agora valida que existe uma escolha `"local"` ou `"remoto"` para cada conflito e lança
+   erro caso contrário — nunca mais assume `"local"` por omissão.
+4. Foi criada `finalizarMerge({preliminar, conflitos, escolhas})` como o **único** caminho que produz um
+   payload gravável: recusa se houver conflito sem escolhas, aplica e valida as escolhas (usando a validação
+   do item 3), e só então roda a nova camada de invariantes financeiros (`mergeInvariants.js`) antes de
+   liberar. `mergeTresVias` sozinho nunca mais devolve algo "pronto para o servidor" — o campo antes chamado
+   `resultado` foi renomeado para `preliminar` para deixar isso explícito no próprio nome.
+5. Novo módulo `src/services/mergeInvariants.js`, com `validarInvariantesFinanceiros(payload)`, verificando
+   (reaproveitando funções puras já existentes — `computeCardInvoice`, `saldoCofrinho` — em vez de duplicar
+   regra): coerência `valor`/`valorPago`/`status`/`pendingAmount` de transação; total de fatura fechada
+   batendo com o recálculo a partir de `trans`; pernas de transferência completas (2, uma de cada tipo);
+   saldo de cofrinho não-negativo; soma de amortizações coerente com o status da dívida. O que não fechar
+   bloqueia `finalizarMerge` (`ok:false, motivo:"invariante_financeira_violada", violacoes`), em vez de
+   passar liso — a recomendação do próprio especialista-financas.
+
+### Alternativas avaliadas
+
+- Reverter a granularidade de conflito para "registro inteiro" sempre que os dois lados mudarem algo nele.
+  Descartada: quebraria o auto-resolve de aninhados (`dividas[].amortizacoes`, `cofrinhos[].aportes`) que é
+  requisito explícito do roadmap, trocando um problema raro (campos financeiros cruzados) por um comum
+  (qualquer edição concorrente vira conflito, mesmo em campos independentes).
+- Confiar na validação de payload já existente em `App.jsx` (`payloadRemotoValido`, usada para a Fase 3) e
+  não duplicar validação estrutural dentro do `mergeService.js`. Descartada: essa validação vive na fronteira
+  de UI/sync, não é chamada por quem for testar ou reusar `mergeService.js` isoladamente, e o próprio
+  guardião apontou que ela não cobre id duplicado nem tipo divergente por chave.
+- Validar invariantes financeiros dentro do próprio algoritmo de merge (`mergeObjeto`/`mergeArrayDeRegistros`),
+  em vez de como camada separada pós-merge. Descartada: acoplaria conhecimento de regra de negócio (fatura,
+  dívida, cofrinho) numa função genérica de merge estrutural, dificultando reuso e teste isolado de cada
+  parte; a camada separada em `mergeInvariants.js` também é o ponto natural para crescer cobertura (ex.
+  parcelamento, ainda não coberto) sem tocar no algoritmo.
+
+### O que muda
+
+`src/services/mergeService.js` reescrito (contrato de `mergeTresVias`/`aplicarEscolhas` mudou, `finalizarMerge`
+é novo); `src/services/mergeInvariants.js` criado; `tests/mergeService.test.js` reescrito (27 casos, incluindo
+os cenários de payload malformado, id duplicado, caminho com caracteres especiais e escolhas incompletas
+exigidos pela revisão); `tests/mergeInvariants.test.js` criado (16 casos). 283/283 testes passando, 0 erros
+de lint, baseline de 8 warnings inalterada.
+
+Ainda não implementado: nenhum destes arquivos está ligado a `syncService.js` ou `App.jsx` — o wiring
+continua sendo o Passo 3 do plano da Fase 4, agora sobre um contrato mais seguro.
+
+### Impacto em LocalStorage
+
+Nenhum ainda — módulo puro, não ligado à persistência. O ponto de atenção fica registrado para o Passo 3:
+aplicar o merge implica múltiplos `setX()` sequenciais (`restoreBackupPayload`), e uma falha de cota no meio
+deixaria o LocalStorage num estado híbrido pior que qualquer um dos dois lados — exige backup obrigatório
+antes de aplicar, e o mesmo padrão de escuta de erro de persistência (`fpro:persist-error`) já usado na Fase 3.
+
+### Impacto em regra de negócio
+
+Nenhuma regra financeira nova foi criada — `mergeInvariants.js` verifica invariantes que já existiam
+implicitamente na regra de cada entidade (RN004/007/008/009/012/013/014/021/025/031/032), aplicadas agora
+também ao resultado do merge, que antes não passava por nenhuma validação de negócio.
+
+### Reversibilidade
+
+**Média.** O algoritmo central de três vias não mudou — a mudança é de contrato (validação de entrada,
+formato do caminho de conflito, validação de escolhas, portão de saída). Reverter exigiria voltar a expor
+`resultado` como gravável direto e remover as validações, reintroduzindo os 5 riscos bloqueantes descritos
+acima.

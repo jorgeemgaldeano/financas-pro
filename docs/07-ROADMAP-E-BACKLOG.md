@@ -1456,6 +1456,31 @@ deve ter, D8): login com a conta real e convergência de fato entre dois navegad
 
 #### Fase 4 — Merge assistido de três vias (RISCO ALTO — o coração do projeto)
 
+**Três decisões de desenho fixadas em `DEC-0044` (2026-08-18), antes do código:** conflito real nunca se
+resolve por data mais recente, sempre é decisão do usuário; a tela mostra resumo por chave, detalhe por item
+fica atrás de expandir; ancestral expurgado (retenção de 100 versões) degrada silenciosamente para o
+comportamento da Fase 3, sem mensagem diferenciada.
+
+**Passo 1 concluído (2026-08-18):** `src/services/mergeService.js` e `src/services/mergeInvariants.js`,
+com 43 testes próprios. Revisado pelo `guardiao-localstorage` e pelo `especialista-financas` antes de
+seguir — o endurecimento de contrato resultante está em `DEC-0045` (payload malformado é recusado, não
+mesclado como exclusão; caminho de conflito estruturado, não string reparseada; escolhas do usuário
+validadas, nunca assumidas; `finalizarMerge` é o único portão que produz payload gravável, e só libera
+depois de checar os invariantes financeiros).
+
+**Passo 2 concluído (2026-08-18):** `pullAncestral(versao, client)` em `src/services/syncService.js`, com
+5 testes. Sem mudança de schema — a policy `versoes_ler` já permitia `select` para `authenticated`.
+
+**Passo 3 concluído (2026-08-18):** `handleSyncNow` em `App.jsx` (branch `push.motivo === "conflito"` da
+sincronização já existente) agora chama `pullAncestral` + `mergeTresVias` em vez de só recusar. Sem
+conflitos reais, aplica sozinho via `finalizarMerge`; com conflitos, abre `SyncConflictModal.jsx` (resumo
+por chave, DEC-0044 decisão 2). Backup obrigatório antes de qualquer gravação local, mesmo padrão de
+escuta de `fpro:persist-error` já usado na Fase 3. 289/289 testes passando, build de produção ok, app
+verificado no navegador sem erro de console.
+
+Falta (Passo 4): verificação manual do conflito real com dois dispositivos autenticados na mesma conta
+Supabase — o mesmo roteiro de dois notebooks já usado para validar a Fase 3.
+
 - [ ] Buscar do servidor a versão carregada (ancestral) no momento da recusa.
 - [ ] Auto-resolver o que só um lado mudou; deduzir exclusão pela ausência em relação
   ao ancestral; apresentar para escolha só o que os dois mudaram, mostrando

@@ -21,7 +21,10 @@
 // própria e não haveria onde pendurar o carimbo sem inventar estrutura. O
 // merge de três vias da Fase 4 trata esses casos comparando valor, não data.
 
-const CAMPOS_DE_CARIMBO = ["updatedAt", "updatedBy"];
+// Exportado para o merge de três vias da Fase 4 (mergeService.js) ignorar os
+// mesmos campos ao decidir se um registro mudou de verdade — evitar duplicar
+// esta lista em dois arquivos.
+export const CAMPOS_DE_CARIMBO = ["updatedAt", "updatedBy"];
 
 // Identificação do dispositivo/pessoa que está escrevendo. Vive em módulo
 // porque a fronteira de persistência não tem acesso ao estado do React. O

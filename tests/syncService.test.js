@@ -6,7 +6,7 @@
 // tocar rede: cada teste injeta um client Supabase falso que reproduz só a
 // cadeia fluente que o próprio syncService.js chama.
 import { describe, it, expect, vi } from "vitest";
-import { signIn, signOut, pullEstado, pushEstado } from "../src/services/syncService.js";
+import { signIn, signOut, pullEstado, pushEstado, pullAncestral } from "../src/services/syncService.js";
 
 describe("client não configurado", () => {
   it("pullEstado recusa sem tentar rede", async () => {
@@ -16,6 +16,10 @@ describe("client não configurado", () => {
   it("pushEstado recusa sem tentar rede", async () => {
     const r = await pushEstado({ payload: {}, usuario: "jorge", versaoEsperada: null }, null);
     expect(r).toEqual({ ok: false, motivo: "nao-configurado" });
+  });
+
+  it("pullAncestral recusa sem tentar rede", async () => {
+    expect(await pullAncestral(5, null)).toEqual({ ok: false, motivo: "nao-configurado" });
   });
 
   it("signIn recusa sem tentar rede", async () => {
@@ -61,6 +65,53 @@ describe("pullEstado", () => {
   it("falha de rede (client lança) vira motivo:rede, nunca propaga a exceção", async () => {
     const client = { from: () => { throw new Error("fetch failed"); } };
     const r = await pullEstado(client);
+    expect(r).toEqual({ ok: false, motivo: "rede", erro: expect.any(Error) });
+  });
+});
+
+describe("pullAncestral", () => {
+  it("versão encontrada: devolve payload/usuario/atualizadoEm do ancestral", async () => {
+    const linha = { payload: { trans: [{ id: "t1", valor: 100 }] }, usuario: "jorge", atualizado_em: "2026-08-01T10:00:00.000Z" };
+    const client = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: linha, error: null }) }) }),
+      }),
+    };
+    const r = await pullAncestral(3, client);
+    expect(r).toEqual({
+      ok: true, existe: true,
+      payload: { trans: [{ id: "t1", valor: 100 }] }, usuario: "jorge", atualizadoEm: "2026-08-01T10:00:00.000Z",
+    });
+  });
+
+  it("versão expurgada pela retenção (não encontrada): existe:false, não erro", async () => {
+    const client = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+      }),
+    };
+    expect(await pullAncestral(3, client)).toEqual({ ok: true, existe: false });
+  });
+
+  it("versao nula (sem histórico de sincronização anterior): existe:false, sem tentar rede", async () => {
+    const client = { from: () => { throw new Error("não deveria chamar a rede"); } };
+    expect(await pullAncestral(null, client)).toEqual({ ok: true, existe: false });
+  });
+
+  it("erro do servidor vira motivo classificado, não exceção", async () => {
+    const client = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { code: "42501" } }) }) }),
+      }),
+    };
+    const r = await pullAncestral(3, client);
+    expect(r.ok).toBe(false);
+    expect(r.motivo).toBe("nao-autorizado");
+  });
+
+  it("falha de rede (client lança) vira motivo:rede, nunca propaga a exceção", async () => {
+    const client = { from: () => { throw new Error("fetch failed"); } };
+    const r = await pullAncestral(3, client);
     expect(r).toEqual({ ok: false, motivo: "rede", erro: expect.any(Error) });
   });
 });

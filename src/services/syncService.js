@@ -71,6 +71,38 @@ export async function pullEstado(client = supabase) {
   }
 }
 
+// ── Ancestral do merge de três vias (Fase 4, DEC-0039, DEC-0044) ────────────
+//
+// Busca em `estado_versoes` a versão que este dispositivo tinha carregado
+// antes de editar — o "ancestral comum" que mergeTresVias() precisa para
+// decidir o que cada lado mudou. `existe:false` cobre os dois motivos
+// possíveis de não achar (versão nunca existiu / já foi expurgada pela
+// retenção de 100 versões, DEC-0042) e não distingue os dois de propósito:
+// nos dois casos o chamador degrada para o comportamento da Fase 3 (recusa +
+// backup, sem mensagem diferenciada — DEC-0044, decisão 3).
+export async function pullAncestral(versao, client = supabase) {
+  if (!client) return { ok: false, motivo: "nao-configurado" };
+  if (versao == null) return { ok: true, existe: false };
+  try {
+    const { data, error } = await client
+      .from("estado_versoes")
+      .select("payload, usuario, atualizado_em")
+      .eq("versao", versao)
+      .maybeSingle();
+    if (error) return { ok: false, motivo: classificarErro(error), erro: error };
+    if (!data) return { ok: true, existe: false };
+    return {
+      ok: true,
+      existe: true,
+      payload: data.payload,
+      usuario: data.usuario,
+      atualizadoEm: data.atualizado_em,
+    };
+  } catch (erro) {
+    return { ok: false, motivo: "rede", erro };
+  }
+}
+
 // versaoEsperada == null  -> INSERT (primeiro estado gravado no servidor)
 // versaoEsperada != null  -> UPDATE condicionado (a própria trava otimista)
 export async function pushEstado({ payload, usuario, versaoEsperada }, client = supabase) {
