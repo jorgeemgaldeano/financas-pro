@@ -95,7 +95,12 @@ export function scoreAutoCategoryRule(descNorm, rule) {
     const kw = normText(keyword);
     if (!kw) continue;
     if (descNorm === kw) score += 30;
-    else if (new RegExp(`\\b${escapeRegex(kw)}\\b`).test(descNorm)) score += Math.min(24, Math.max(8, kw.length));
+    // Fronteira própria em vez de \b: \b trata "_" como caractere de palavra
+    // (não separa "drogaria" de "drogaria_sp"), o que reabriria o mesmo tipo
+    // de falso negativo que motivou trocar o includes() original por \b.
+    else if (new RegExp(`(?:^|[^a-z0-9])${escapeRegex(kw)}(?:[^a-z0-9]|$)`).test(descNorm)) {
+      score += Math.min(24, Math.max(8, kw.length));
+    }
   }
   return score;
 }

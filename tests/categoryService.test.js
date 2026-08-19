@@ -38,3 +38,14 @@ describe("guessCategoryForTransaction — descrições reais de fatura", () => {
     expect(categorize("KEETA *PEDIDO 123 SAO PAULO")).toBe("sub1c");
   });
 });
+
+describe("scoreAutoCategoryRule — '_' não deve colar palavras (Drogaria_SP)", () => {
+  it("reconhece 'drogaria' mesmo seguida de underscore", () => {
+    const rule = { keywords: ["drogaria"] };
+    expect(scoreAutoCategoryRule(normText("Drogaria_SP d PARC 02/06 Sao Paulo"), rule)).toBeGreaterThan(0);
+  });
+
+  it("categoriza 'Drogaria_SP' como Farmácia de ponta a ponta", () => {
+    expect(categorize("Drogaria_SP d PARC 02/06 Sao Paulo")).toBe("sub4b");
+  });
+});
