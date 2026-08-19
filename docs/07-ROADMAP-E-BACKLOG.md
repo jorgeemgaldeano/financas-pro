@@ -1552,3 +1552,76 @@ encerrada.**
 - [ ] Cadastrar (ou confirmar) a categoria "Compras On-line" nas duas instâncias
   já em produção (Supabase) — o código-semente (`INIT_CATS`) só vale para
   contas novas; quem já fez o cutover da Fase A não recebe retroativamente.
+
+## Propostas em aberto — pós v0.3.38 (aguardando decisão do Jorge)
+
+Análise de UX/QA/arquitetura sobre o processo de sincronização entre os dois
+notebooks, feita em 2026-08-19, depois de o Jorge relatar que "não está muito
+legal o modo que está gerando". Nenhum item abaixo foi decidido ainda —
+viram `DEC-0046`/`DEC-0047` quando aprovados.
+
+### Proposta 1 — Indicador de status persistente + sync periódico leve (APROVADA, aguardando checagem de quota)
+
+**Contexto:** hoje o status de sync só aparece como toast transiente
+(`pushToast` em `handleSyncNow`) — se perdido, só se descobre entrando em
+Parâmetros → Sincronização. O sync automático só dispara em 3 gatilhos (abrir
+o app, esconder a aba, botão manual) — sem nenhum polling enquanto o app
+fica aberto e em foco, o que pode acumular divergência entre os dois
+notebooks por horas se nenhum trocar de aba.
+
+**Desenho:** badge fixo no topbar (ao lado do "● salvo") mostrando
+"🔄 sincronizado há Xm" ou "⚠ não sincronizado"; `setInterval` leve (ex.: 5
+em 5 min, só quando a aba está em foco e logada) chamando `handleSyncNow`
+silenciosamente — reaproveita 100% da lógica de decisão já existente, só
+adiciona um gatilho novo.
+
+**Prós:** resolve visibilidade de status e reduz a janela de divergência
+entre os dois notebooks sem exigir ação humana.
+**Contras:** mais chamadas de rede ao Supabase — **bloqueado por checagem de
+quota do free tier antes de implementar** (ver instrução de como checar em
+`current-state.md`/sessão de 2026-08-19). Pode ser complexidade além do
+necessário dado o uso caracterizado (quase sempre em casa, mesma rede).
+
+**Status:** Jorge aprovou seguir com esta proposta. **Implementação
+aguardando ele checar o consumo de egress/bandwidth no painel Supabase**
+antes de fixar o intervalo do polling.
+
+### Proposta T7 — Autenticação local (PIN) na aplicação
+
+**Contexto:** o app não tem nenhum gate de autenticação próprio — `App.jsx`
+renderiza o Dashboard e todas as abas incondicionalmente, independente de
+`syncSession`. O login do Supabase controla só push/pull pro servidor
+compartilhado, não a visibilidade do que já está salvo localmente. Qualquer
+pessoa com acesso físico/remoto a um dos dois notebooks (navegador já aberto,
+SO desbloqueado) vê saldo e lançamentos sem nenhuma senha da própria
+aplicação — risco que existia desde antes do deploy (local-first), mas ficou
+mais visível agora que é uma URL pública.
+
+**Proposta:** tela de PIN (4-6 dígitos) que bloqueia a renderização de
+qualquer aba até o PIN correto ser digitado. Hash simples do PIN gravado no
+`localStorage` (comparado no cliente, sem servidor, sem custo, sem
+dependência de rede — funciona offline). Enquanto não digitar certo, só a
+tela de PIN é mostrada, nenhum dado é lido ou exibido.
+
+**Prós:** resolve o cenário relatado (abrir o link/notebook e qualquer um ver
+o saldo); zero custo de infraestrutura nova; funciona no modo offline que o
+projeto já garante; implementação isolada (um componente gate no topo da
+árvore, não toca `mergeService`/`syncService`).
+
+**Contras — limitação honesta:** não é segurança "de verdade" contra um
+atacante técnico — roda 100% no cliente, um hash no `localStorage` e o
+código-fonte aberto no bundle tornam contornável via DevTools por quem
+souber o que está fazendo. É proporcional a "impedir uma olhada casual",
+não a proteger contra ataque deliberado. Se o requisito for esse último,
+a arquitetura precisaria de backend real (fora do escopo local-first atual).
+
+**Esforço estimado:** baixo-médio. Um componente `PinGate.jsx` (novo),
+estado em `localStorage` (`pinHash`, nova chave — avaliar se entra no
+`BACKUP_STORAGE_KEYS` ou fica fora do backup, já que backup restaurado em
+outro dispositivo não deveria trocar o PIN local dele), wiring no topo de
+`main.jsx` ou `AppShell.jsx`, e uma tela de "definir PIN" no primeiro uso.
+
+**Aguardando decisão do Jorge:** confirmar o desenho (PIN vs. senha
+alfanumérica; se cada notebook tem PIN próprio ou é compartilhado; timeout
+de sessão — expira sozinho depois de X minutos parado, ou só ao fechar a
+aba) antes de virar `DEC-0047` e entrar em implementação.
