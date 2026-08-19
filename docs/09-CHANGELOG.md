@@ -2038,3 +2038,70 @@ sem campo novo e sem alteração de LocalStorage. Fecha itens do backlog
   condiciona a implementação a avaliar antes se o bloqueio simples atual
   incomoda o usuário — é feature nova, não limpeza técnica. Fica para
   decisão do usuário.
+
+## [0.3.39.0] - 2026-08-19
+
+Análise de UX/QA/arquitetura sobre o processo de sincronização entre os dois notebooks, a pedido de Jorge
+("não está muito legal o modo que está gerando"). Produziu 4 propostas registradas no roadmap: 3 de melhoria
+do fluxo de sync (indicador de status + polling leve aprovado, aguardando checagem de quota do Supabase) e
+1 de autenticação local, decidida e implementada nesta versão (`DEC-0047`).
+
+### Adicionado
+
+- **Gate de PIN local** (`src/services/pinService.js` + `src/components/ui/PinGate.jsx`): tela de PIN que
+  bloqueia a renderização de qualquer aba até o PIN correto ser digitado. Resolve a ausência total de
+  autenticação própria da aplicação — antes, `App.jsx` renderizava tudo incondicionalmente, e o login do
+  Supabase controlava só push/pull pro servidor, não a visibilidade do que já estava salvo localmente.
+  Hash SHA-256 via `crypto.subtle`, gravado numa chave de LocalStorage própria (`pinHash`) deliberadamente
+  fora de `BACKUP_STORAGE_KEYS` e do payload de sync — restaurar um backup do cônjuge não altera o PIN
+  local deste dispositivo. Sessão destravada até fechar a aba (`sessionStorage`, decisão de Jorge).
+  **Limitação aceita, não regressão:** roda 100% no cliente, contornável via DevTools por quem souber o
+  que está fazendo — proporcional a "impedir uma olhada casual", não a um atacante técnico deliberado.
+- **Categoria "Compras On-line"** (`cat11` em `INIT_CATS`) com regra de autocategorização para Shopee e
+  Mercado Livre, e "Keeta" adicionada às palavras-chave de Delivery — achados ao testar a categorização
+  automática contra uma fatura de cartão real (69% caía em "Outros").
+
+### Corrigido
+
+- **Falso positivo de autocategorização**: a keyword "game" (categoria Jogos) batia por substring dentro
+  da palavra "pagamento", classificando tarifas/juros de fatura como Jogos. `scoreAutoCategoryRule` trocou
+  matching por substring puro por uma fronteira de palavra própria — também removeu ~13 falsos positivos
+  silenciosos preexistentes (ex.: "bar" dentro de "Barbers", "tim" dentro de "Intimissimi", "saas" dentro
+  de "Asaasip") e, numa segunda correção no mesmo dia, ajustou a fronteira para não tratar "_" como parte
+  de palavra (a keyword "drogaria" tinha parado de bater em "Drogaria_SP").
+
+### Removido
+
+- **`App.jsx` órfão na raiz do repositório** (3.984 linhas, congelado desde a v0.3.16.2, sem nenhum import
+  apontando para ele — confirmado pela cadeia completa `index.html → main.jsx → src/App.jsx`).
+- **`coverage/` desrastreado do Git** (18 arquivos) — continua sendo gerado localmente, agora ignorado via
+  `.gitignore`.
+
+### Alterado
+
+- `package.json`: `"name"` de `"financas-pro-localhost"` para `"financas-pro"` (residual da fase antes do
+  deploy); versão visual atualizada para `v0.3.39.0`.
+- Fase A (deploy + cutover) da v0.3.38 marcada como concluída no roadmap — validada por Jorge nos dois
+  notebooks reais em 2026-08-19.
+
+### Migração
+
+- Nenhuma alteração de schema/chave existente. `pinHash` é uma chave nova, opcional (app funciona sem PIN
+  configurado até o primeiro uso definir um).
+
+### Testes
+
+- `npm test` (Vitest): **304/304 passando** (antes: 294; +5 categoryService, +2 fronteira de "_",
+  +8 pinService — 15 testes novos no total desta versão). `npm run build` aprovado.
+- `PinGate` verificado de ponta a ponta em navegador real (servidor dev local, não produção): tela de
+  setup no primeiro uso → destrava → sobrevive a reload da aba → tranca de novo ao limpar
+  `sessionStorage` (proxy de "fechar a aba") → recusa PIN errado com mensagem → aceita o PIN certo.
+- Categorização verificada contra uma fatura de cartão de crédito real (OFX), fora do navegador (script
+  Node isolado, sem tocar produção nem sincronizar nada).
+
+### Backlog não incluído nesta versão
+
+- Indicador de status de sync persistente + polling leve (Proposta 1 do roadmap): aprovada por Jorge,
+  aguardando ele checar consumo de egress/bandwidth no painel Supabase antes de fixar o intervalo.
+- Central de sync no topbar e aviso ativo de "outro dispositivo à frente" (Propostas 2 e 3 da análise de
+  sincronização): não decididas ainda.

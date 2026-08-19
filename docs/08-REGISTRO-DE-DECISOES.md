@@ -2814,3 +2814,54 @@ também ao resultado do merge, que antes não passava por nenhuma validação de
 formato do caminho de conflito, validação de escolhas, portão de saída). Reverter exigiria voltar a expor
 `resultado` como gravável direto e remover as validações, reintroduzindo os 5 riscos bloqueantes descritos
 acima.
+
+---
+
+## DEC-0047 — Autenticação local (PIN) na aplicação: três decisões de desenho
+
+Data: 2026-08-19
+
+### Contexto
+
+Análise de UX/QA/arquitetura sobre o processo de sincronização (a pedido de Jorge, "não está muito legal o
+modo que está gerando") revelou que o app não tem nenhum gate de autenticação próprio: `App.jsx` renderiza
+todas as abas incondicionalmente, independente de `syncSession`. O login do Supabase controla só push/pull
+pro servidor compartilhado — não a visibilidade do que já está salvo localmente. Qualquer pessoa com acesso
+físico/remoto a um dos dois notebooks vê saldo e lançamentos sem senha nenhuma da própria aplicação. Antes de
+implementar, três pontos de desenho foram levados a Jorge (proposta registrada no roadmap em 2026-08-19).
+
+### Decisão
+
+**1. PIN compartilhado entre os dois notebooks** (não um PIN por dispositivo).
+
+Alternativa recomendada e rejeitada: PIN próprio por notebook, para que vazar em um não comprometesse o
+outro. Jorge escolheu o compartilhado — registrado sem ressalva.
+
+**2. Sessão destravada até fechar a aba** (não expira por inatividade, não pede de novo a cada F5).
+
+Implementado com `sessionStorage` (sobrevive a reload da mesma aba, é limpo pelo navegador ao fechar
+aba/janela) — a semântica pedida sem precisar de temporizador algum.
+
+**3. O hash do PIN fica fora do backup/export e fora do payload de sincronização.**
+
+`pinHash` é uma chave de LocalStorage própria (`fpro_v1_pinHash`), deliberadamente ausente de
+`BACKUP_STORAGE_KEYS` e de `buildSyncPayload` (que é uma lista explícita de campos em `App.jsx`, não itera
+chaves). Restaurar um backup do cônjuge não altera o PIN deste dispositivo.
+
+### O que muda
+
+Novo módulo `src/services/pinService.js` (hash SHA-256 via `crypto.subtle`, sem dependência nova) e novo
+componente `src/components/ui/PinGate.jsx`, que envolve `<App/>` em `main.jsx` — nenhuma linha de `App.jsx`
+foi tocada. Primeira execução mostra tela de "definir PIN"; depois disso, tela de "PIN" até acertar.
+
+### Limitação aceita (não é regressão, é o desenho)
+
+Roda 100% no cliente: um hash em LocalStorage e o código-fonte aberto no bundle tornam isso contornável via
+DevTools por quem souber o que está fazendo. É proporcional a "impedir uma olhada casual" (o cenário
+relatado por Jorge), não a proteger contra um atacante técnico deliberado — isso exigiria backend real, fora
+do escopo local-first do projeto.
+
+### Reversibilidade
+
+**Alta.** O gate é um componente isolado que só decide se renderiza `children` — removê-lo é apagar o
+`PinGate` de `main.jsx` e o próprio arquivo, sem tocar em nenhum dado financeiro.

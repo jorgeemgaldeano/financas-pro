@@ -1586,7 +1586,7 @@ necessário dado o uso caracterizado (quase sempre em casa, mesma rede).
 aguardando ele checar o consumo de egress/bandwidth no painel Supabase**
 antes de fixar o intervalo do polling.
 
-### Proposta T7 — Autenticação local (PIN) na aplicação
+### Proposta T7 — Autenticação local (PIN) na aplicação — IMPLEMENTADA em 2026-08-19 (`DEC-0047`)
 
 **Contexto:** o app não tem nenhum gate de autenticação próprio — `App.jsx`
 renderiza o Dashboard e todas as abas incondicionalmente, independente de
@@ -1621,7 +1621,12 @@ estado em `localStorage` (`pinHash`, nova chave — avaliar se entra no
 outro dispositivo não deveria trocar o PIN local dele), wiring no topo de
 `main.jsx` ou `AppShell.jsx`, e uma tela de "definir PIN" no primeiro uso.
 
-**Aguardando decisão do Jorge:** confirmar o desenho (PIN vs. senha
-alfanumérica; se cada notebook tem PIN próprio ou é compartilhado; timeout
-de sessão — expira sozinho depois de X minutos parado, ou só ao fechar a
-aba) antes de virar `DEC-0047` e entrar em implementação.
+**Decidido e implementado (`DEC-0047`):** PIN compartilhado entre os dois
+notebooks (não por dispositivo — Jorge decidiu contra a recomendação); sessão
+destravada até fechar a aba (`sessionStorage`); hash fora do backup e do
+payload de sync. `src/services/pinService.js` (SHA-256 via `crypto.subtle`,
+8 testes novos) + `src/components/ui/PinGate.jsx`, envolvendo `<App/>` em
+`main.jsx` sem tocar nenhuma linha de `App.jsx`. Verificado de ponta a ponta
+em navegador real (servidor dev local, não produção): setup → destrava →
+sobrevive a reload → tranca de novo ao limpar `sessionStorage` → recusa PIN
+errado → aceita o certo. 304/304 testes, lint limpo, build ok.
