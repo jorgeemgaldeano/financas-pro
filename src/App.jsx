@@ -1115,7 +1115,10 @@ export default function App() {
       return;
     }
 
-    setSyncConflito({ conflitos: merge.conflitos, preliminar: merge.preliminar, versaoRemota: fresco.versao, erro: null });
+    setSyncConflito({
+      conflitos: merge.conflitos, preliminar: merge.preliminar, versaoRemota: fresco.versao, erro: null,
+      local, remoto: fresco.payload,
+    });
   }, [syncEstado, recusarComoFase3, aplicarMergeResolvido]);
 
   const handleSyncConflitoConfirmar = useCallback(async (escolhas) => {
@@ -2003,6 +2006,8 @@ export default function App() {
         {syncConflito && (
           <SyncConflictModal
             conflitos={syncConflito.conflitos}
+            local={syncConflito.local}
+            remoto={syncConflito.remoto}
             erro={syncConflito.erro}
             onConfirmar={handleSyncConflitoConfirmar}
             onCancelar={handleSyncConflitoCancelar}

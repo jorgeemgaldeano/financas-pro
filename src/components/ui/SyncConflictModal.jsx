@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 import { C as DEFAULT_COLORS } from "../../theme/tokens.js";
+import { catLabel } from "../../utils/categoryTreeUtils.js";
 
 const RÓTULO_CHAVE = {
   trans: "Lançamentos",
@@ -25,15 +26,99 @@ const RÓTULO_CHAVE = {
   params: "Parâmetros",
 };
 
+// Nome amigável do campo em conflito — cai no nome técnico quando não
+// conhecido, mas a maioria dos campos que geram conflito real de valor está
+// listada aqui.
+const RÓTULO_CAMPO = {
+  catId: "Categoria",
+  contaId: "Conta", accountId: "Conta", contaPagamentoId: "Conta de pagamento",
+  cartaoId: "Cartão", cardId: "Cartão",
+  pessoaId: "Pessoa",
+  valor: "Valor", amount: "Valor",
+  valorPago: "Valor pago", paidAmount: "Valor pago",
+  pendingAmount: "Valor pendente",
+  status: "Status",
+  descricao: "Descrição",
+  data: "Data",
+  nome: "Nome",
+  total: "Total",
+};
+
+// Resolve o id bruto de um campo de referência (catId, contaId, cartaoId...)
+// para o nome legível, usando o payload do lado correspondente (cada lado
+// pode ter cadastrado a categoria/conta/cartão com nome diferente — por isso
+// resolve contra o PRÓPRIO payload do lado, não um só para os dois).
+const RESOLVER_REFERENCIA = {
+  catId: (payload, id) => catLabel(payload?.cats || [], id),
+  contaId: (payload, id) => payload?.contas?.find(c => c.id === id)?.nome,
+  accountId: (payload, id) => payload?.contas?.find(c => c.id === id)?.nome,
+  contaPagamentoId: (payload, id) => payload?.contas?.find(c => c.id === id)?.nome,
+  cartaoId: (payload, id) => payload?.cards?.find(c => c.id === id)?.nome,
+  cardId: (payload, id) => payload?.cards?.find(c => c.id === id)?.nome,
+  pessoaId: (payload, id) => payload?.pessoas?.find(p => p.id === id)?.nome,
+};
+
 function rotularChave(chave) {
   return RÓTULO_CHAVE[chave] || chave;
 }
 
-function formatarValor(v) {
+function nomeDoCampo(caminho) {
+  return caminho?.[caminho.length - 1]?.nome;
+}
+
+function rotularCampo(nomeCampo) {
+  return RÓTULO_CAMPO[nomeCampo] || nomeCampo;
+}
+
+function formatarValorBruto(v) {
   if (v === undefined) return "(removido)";
   if (v === null) return "(vazio)";
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
+}
+
+// Mostra o nome resolvido (categoria/conta/cartão/pessoa) quando o campo é
+// uma referência por id conhecida; senão cai no valor bruto formatado.
+function formatarValorDoConflito(caminho, valor, payload) {
+  if (valor === undefined) return "(removido)";
+  const nomeCampo = nomeDoCampo(caminho);
+  const resolver = nomeCampo && RESOLVER_REFERENCIA[nomeCampo];
+  if (resolver) {
+    const resolvido = resolver(payload, valor);
+    if (resolvido) return resolvido;
+  }
+  return formatarValorBruto(valor);
+}
+
+// Acha o registro-pai mais próximo do campo em conflito (o último segmento
+// "registro" do caminho) dentro de um dos payloads completos, para dar
+// contexto ("Supermercado Extra • R$ 150,00 • 05/08") em vez de só o id
+// técnico do registro.
+function acharRegistroPai(caminho, payload) {
+  let no = payload;
+  let registro = null;
+  for (const seg of caminho) {
+    if (!no) return registro;
+    if (seg.tipo === "campo") {
+      no = no[seg.nome];
+    } else {
+      no = Array.isArray(no) ? no.find(item => item && item.id === seg.id) : undefined;
+      registro = no;
+    }
+  }
+  return registro;
+}
+
+function rotularContexto(registro) {
+  if (!registro) return null;
+  const partes = [];
+  if (registro.descricao) partes.push(registro.descricao);
+  else if (registro.nome) partes.push(registro.nome);
+  if (registro.valor !== undefined && registro.valor !== null) {
+    partes.push(`R$ ${Number(registro.valor).toFixed(2)}`);
+  }
+  if (registro.data) partes.push(registro.data);
+  return partes.length ? partes.join(" • ") : null;
 }
 
 function agruparPorChave(conflitos) {
@@ -45,7 +130,7 @@ function agruparPorChave(conflitos) {
   return [...grupos.entries()];
 }
 
-export function SyncConflictModal({ conflitos, onConfirmar, onCancelar, erro, colors = DEFAULT_COLORS }) {
+export function SyncConflictModal({ conflitos, local, remoto, onConfirmar, onCancelar, erro, colors = DEFAULT_COLORS }) {
   const [escolhas, setEscolhas] = useState(() => new Array(conflitos.length).fill(undefined));
   const [chaveExpandida, setChaveExpandida] = useState(null);
 
@@ -116,37 +201,45 @@ export function SyncConflictModal({ conflitos, onConfirmar, onCancelar, erro, co
 
               {expandida && (
                 <div style={{ padding: "8px 14px 14px" }}>
-                  {itens.map(item => (
-                    <div key={item.indice} style={{ padding: "10px 0", borderTop: `1px solid ${colors.border}` }}>
-                      <div style={{ fontSize: 12, color: colors.soft, marginBottom: 6 }}>{item.rotulo}</div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                          onClick={() => escolher(item.indice, "local")}
-                          style={{
-                            flex: 1, textAlign: "left", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
-                            border: `2px solid ${escolhas[item.indice] === "local" ? colors.emerald : colors.border}`,
-                            background: escolhas[item.indice] === "local" ? `${colors.emerald}22` : "transparent",
-                            color: colors.text, fontSize: 13,
-                          }}
-                        >
-                          <div style={{ fontSize: 11, color: colors.soft, marginBottom: 2 }}>Este dispositivo</div>
-                          {formatarValor(item.local)}
-                        </button>
-                        <button
-                          onClick={() => escolher(item.indice, "remoto")}
-                          style={{
-                            flex: 1, textAlign: "left", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
-                            border: `2px solid ${escolhas[item.indice] === "remoto" ? colors.emerald : colors.border}`,
-                            background: escolhas[item.indice] === "remoto" ? `${colors.emerald}22` : "transparent",
-                            color: colors.text, fontSize: 13,
-                          }}
-                        >
-                          <div style={{ fontSize: 11, color: colors.soft, marginBottom: 2 }}>Outro dispositivo</div>
-                          {formatarValor(item.remoto)}
-                        </button>
+                  {itens.map(item => {
+                    const contextoLocal = rotularContexto(acharRegistroPai(item.caminho, local));
+                    const contextoRemoto = rotularContexto(acharRegistroPai(item.caminho, remoto));
+                    const contexto = contextoLocal || contextoRemoto;
+                    return (
+                      <div key={item.indice} style={{ padding: "10px 0", borderTop: `1px solid ${colors.border}` }}>
+                        {contexto && (
+                          <div style={{ fontSize: 13, color: colors.text, fontWeight: 700, marginBottom: 2 }}>{contexto}</div>
+                        )}
+                        <div style={{ fontSize: 12, color: colors.soft, marginBottom: 6 }}>{rotularCampo(nomeDoCampo(item.caminho))}</div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            onClick={() => escolher(item.indice, "local")}
+                            style={{
+                              flex: 1, textAlign: "left", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
+                              border: `2px solid ${escolhas[item.indice] === "local" ? colors.emerald : colors.border}`,
+                              background: escolhas[item.indice] === "local" ? `${colors.emerald}22` : "transparent",
+                              color: colors.text, fontSize: 13,
+                            }}
+                          >
+                            <div style={{ fontSize: 11, color: colors.soft, marginBottom: 2 }}>Este dispositivo</div>
+                            {formatarValorDoConflito(item.caminho, item.local, local)}
+                          </button>
+                          <button
+                            onClick={() => escolher(item.indice, "remoto")}
+                            style={{
+                              flex: 1, textAlign: "left", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
+                              border: `2px solid ${escolhas[item.indice] === "remoto" ? colors.emerald : colors.border}`,
+                              background: escolhas[item.indice] === "remoto" ? `${colors.emerald}22` : "transparent",
+                              color: colors.text, fontSize: 13,
+                            }}
+                          >
+                            <div style={{ fontSize: 11, color: colors.soft, marginBottom: 2 }}>Outro dispositivo</div>
+                            {formatarValorDoConflito(item.caminho, item.remoto, remoto)}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
