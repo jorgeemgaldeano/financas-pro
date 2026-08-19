@@ -10,7 +10,7 @@ export const AUTO_CATEGORY_RULES = [
 
   { tipo:"despesa", ids:["sub1a"], labels:["Alimentação › Supermercado","Supermercado"], keywords:["supermercado","mercado","atacadao","assai","carrefour","extra","pao de acucar","pao acucar","hortifruti","sacolao","acougue","mercearia","varejao","mini mercado","emporio","gpa","sonda","mambo"] },
   { tipo:"despesa", ids:["sub1b2","sub1b"], labels:["Alimentação › Restaurantes › Jantar","Restaurantes"], keywords:["restaurante","lanchonete","burger","hamburguer","pizza","pizzaria","bar ","churrascaria","sushi","temakeria","bistro","outback","madero","coco bambu"] },
-  { tipo:"despesa", ids:["sub1c"], labels:["Alimentação › Delivery","Delivery"], keywords:["ifood","i food","rappi","delivery","aiqfome","ubereats","uber eats","zé delivery","ze delivery"] },
+  { tipo:"despesa", ids:["sub1c"], labels:["Alimentação › Delivery","Delivery"], keywords:["ifood","i food","rappi","delivery","aiqfome","ubereats","uber eats","zé delivery","ze delivery","keeta"] },
   { tipo:"despesa", ids:["sub1d"], labels:["Alimentação › Padaria / Café","Padaria"], keywords:["padaria","panificadora","cafe","cafeteria","starbucks","pao"] },
 
   { tipo:"despesa", ids:["sub2a"], labels:["Transporte › Combustível","Combustível"], keywords:["combustivel","posto","gasolina","etanol","alcool","shell","ipiranga","petrobras","br mania","abastec","abastecimento"] },
@@ -48,6 +48,8 @@ export const AUTO_CATEGORY_RULES = [
   { tipo:"despesa", ids:["sub8a"], labels:["Tecnologia › Hardware / Dispositivos","Hardware"], keywords:["hardware","notebook","celular","samsung","apple store","kabum","terabyte","pichau","fast shop","magazine luiza"] },
   { tipo:"despesa", ids:["sub8b"], labels:["Tecnologia › Serviços Cloud / SaaS","Serviços Cloud / SaaS"], keywords:["aws","amazon web services","google cloud","azure","microsoft","office 365","github","vercel","hostinger","digital ocean","cloudflare","openai","chatgpt"] },
   { tipo:"despesa", ids:["sub8c"], labels:["Tecnologia › Assinaturas Tech","Assinaturas Tech"], keywords:["assinatura software","saas","adobe","canva","notion","figma","dropbox","icloud","google one"] },
+
+  { tipo:"despesa", ids:["cat11"], labels:["Compras On-line","Compras Online"], keywords:["shopee","mercadolivre","mercado livre"] },
 ];
 
 export const normText = (value) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -85,13 +87,15 @@ export function resolveAutoCatId(cats, ids = [], labels = [], fallback = "cat10"
   return byId.has(fallback) ? fallback : (selectable.find(f => normText(f.nome) === "outros")?.id || selectable[0]?.id || fallback);
 }
 
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export function scoreAutoCategoryRule(descNorm, rule) {
   let score = 0;
   for (const keyword of rule.keywords || []) {
     const kw = normText(keyword);
     if (!kw) continue;
     if (descNorm === kw) score += 30;
-    else if (descNorm.includes(kw)) score += Math.min(24, Math.max(8, kw.length));
+    else if (new RegExp(`\\b${escapeRegex(kw)}\\b`).test(descNorm)) score += Math.min(24, Math.max(8, kw.length));
   }
   return score;
 }

@@ -70,6 +70,7 @@ export const INIT_CATS = [
     { id:"sub9b", nome:"Freelance", subs:[] },
     { id:"sub9c", nome:"Investimentos", subs:[] },
   ]},
+  { id:"cat11",nome:"Compras On-line", cor:"#FF8A65", icon:"🛍️", subs:[] },
   { id:"cat10",nome:"Outros",       cor:"#B0BEC5", icon:"📦", subs:[] },
 ];
 
