@@ -1546,11 +1546,9 @@ encerrada.**
   Pluxee.
 - [ ] Testes de integração leves com `@testing-library/react`.
 - [ ] Smoke test E2E (Playwright) cobrindo o checklist de fatura.
-- [ ] Ajustar `scoreAutoCategoryRule` (`categoryService.js`) para tratar `_`/`*`/`.`
-  como separador de palavra também, não só espaço — hoje `\b` trata `_` como
-  caractere de palavra, e uma keyword como "drogaria" não bate mais em
-  "Drogaria_SP" (achado ao corrigir o bug de "game" dentro de "pagamento" em
-  2026-08-19, commit `b6af2c4`).
+- [x] ~~Ajustar `scoreAutoCategoryRule` para tratar `_` como separador de
+  palavra~~ — RESOLVIDO em 2026-08-19 (commit `abe29a0`): fronteira própria
+  no lugar de `\b`, consistente com o separador que `autoCatTokens` já usava.
 - [ ] Cadastrar (ou confirmar) a categoria "Compras On-line" nas duas instâncias
   já em produção (Supabase) — o código-semente (`INIT_CATS`) só vale para
   contas novas; quem já fez o cutover da Fase A não recebe retroativamente.
