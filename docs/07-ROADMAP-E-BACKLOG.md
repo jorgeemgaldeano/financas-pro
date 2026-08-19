@@ -1515,13 +1515,16 @@ encerrada.**
   com servidor/aba limpos: sync automático guardado corretamente, diálogo de apagar exige
   o texto exato, reset local + toast corretos, 0 erro de console, 289/289 testes, lint limpo.
 
-#### Fase A — Deploy e cutover (risco baixo)
+#### Fase A — Deploy e cutover (risco baixo) — CONCLUÍDA em 2026-08-19
 
-- [ ] Publicar em `*.vercel.app` (T1), **sem PWA** (T2) — `RN017` já alterada para
+- [x] Publicar em `*.vercel.app` (T1), **sem PWA** (T2) — `RN017` já alterada para
   separar "gerar backup não exige rede" de "carregar o app publicado exige".
-- [ ] Cutover: os dois abrem a URL, um cadastra contas, saldos iniciais e
+  URL: `https://financas-pro-blush.vercel.app`.
+- [x] Cutover: os dois abrem a URL, um cadastra contas, saldos iniciais e
   recorrências, o sync é ligado.
-- Aceite: os dois notebooks operando na mesma base pela URL pública.
+- Aceite: os dois notebooks operando na mesma base pela URL pública. **Confirmado
+  pelo Jorge em 2026-08-19** — sincronização testada e aprovada nos dois
+  dispositivos. **v0.3.38 encerrada por completo.**
 
 ### Backlog aberto (sem versão agendada, baixa prioridade)
 
@@ -1543,3 +1546,11 @@ encerrada.**
   Pluxee.
 - [ ] Testes de integração leves com `@testing-library/react`.
 - [ ] Smoke test E2E (Playwright) cobrindo o checklist de fatura.
+- [ ] Ajustar `scoreAutoCategoryRule` (`categoryService.js`) para tratar `_`/`*`/`.`
+  como separador de palavra também, não só espaço — hoje `\b` trata `_` como
+  caractere de palavra, e uma keyword como "drogaria" não bate mais em
+  "Drogaria_SP" (achado ao corrigir o bug de "game" dentro de "pagamento" em
+  2026-08-19, commit `b6af2c4`).
+- [ ] Cadastrar (ou confirmar) a categoria "Compras On-line" nas duas instâncias
+  já em produção (Supabase) — o código-semente (`INIT_CATS`) só vale para
+  contas novas; quem já fez o cutover da Fase A não recebe retroativamente.
