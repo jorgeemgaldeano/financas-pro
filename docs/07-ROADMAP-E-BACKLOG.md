@@ -1478,8 +1478,12 @@ por chave, DEC-0044 decisão 2). Backup obrigatório antes de qualquer gravaçã
 escuta de `fpro:persist-error` já usado na Fase 3. 289/289 testes passando, build de produção ok, app
 verificado no navegador sem erro de console.
 
-Falta (Passo 4): verificação manual do conflito real com dois dispositivos autenticados na mesma conta
-Supabase — o mesmo roteiro de dois notebooks já usado para validar a Fase 3.
+**Passo 4 concluído (2026-08-18):** verificação manual com dois notebooks reais autenticados na mesma conta
+Supabase — o conflito real abriu o `SyncConflictModal`, resolveu a divergência e sincronizou. Achado do
+próprio teste: o modal mostrava o campo técnico e o id bruto (`catId: "sub5d"` x `"sub1b2"`), ilegível para
+decidir — corrigido no mesmo dia (resolve `catId`/`contaId`/`cartaoId`/`pessoaId` para o nome cadastrado em
+cada lado, e mostra descrição/valor/data do lançamento como contexto). Retestado e aprovado. **Fase 4
+encerrada.**
 
 - [ ] Buscar do servidor a versão carregada (ancestral) no momento da recusa.
 - [ ] Auto-resolver o que só um lado mudou; deduzir exclusão pela ausência em relação
@@ -1494,12 +1498,22 @@ Supabase — o mesmo roteiro de dois notebooks já usado para validar a Fase 3.
   ancestral indisponível.
 - Aceite: nenhum cenário da bateria perde dado sem o usuário ter escolhido.
 
-#### Fase 5 — Orquestração (risco médio)
+#### Fase 5 — Orquestração (risco médio) — CONCLUÍDA em 2026-08-18
 
-- [ ] Sync ao abrir, ao sair e por botão manual (D6).
-- [ ] **"Apagar dados financeiros" passa a propagar** (T4): backup automático baixado
-  antes e confirmação por digitação no lugar do `window.confirm`.
-- Aceite: os dois dispositivos convergem em uso normal de um dia.
+- [x] Sync ao abrir, ao sair e por botão manual (D6). `App.jsx`: um `useEffect` guardado
+  por `useRef` dispara `handleSyncNow()` uma vez quando config+sessão+usuário ficam
+  prontos (ao abrir); outro escuta `visibilitychange` e dispara ao esconder a aba
+  (proxy de "ao sair" — mais confiável que `beforeunload` para uma chamada de rede
+  autenticada). Os dois só chamam `handleSyncNow`, sem duplicar nenhuma regra de decisão.
+- [x] **"Apagar dados financeiros" passa a propagar** (T4): `ParamsTab.jsx` trocou o
+  `window.confirm` por um `ConfirmDialog` com campo de digitação (exige "APAGAR" para
+  habilitar o botão). `handleReset` em `App.jsx` agora: (1) backup automático obrigatório
+  antes — aborta se falhar; (2) aplica o reset local; (3) se sync configurado/logado,
+  propaga o payload zerado ao servidor via `pushEstado`, com o mesmo tratamento de
+  conflito do resto do app (avisa para sincronizar de novo em vez de tentar forçar).
+- Aceite: os dois dispositivos convergem em uso normal de um dia. Verificado nesta sessão
+  com servidor/aba limpos: sync automático guardado corretamente, diálogo de apagar exige
+  o texto exato, reset local + toast corretos, 0 erro de console, 289/289 testes, lint limpo.
 
 #### Fase A — Deploy e cutover (risco baixo)
 

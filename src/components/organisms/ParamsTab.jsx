@@ -28,6 +28,10 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
   const [recatDlg, setRecatDlg] = useState(null);
   // { title, message, tone, onConfirm } | null  (confirmações simples)
   const [confirmDlg, setConfirmDlg] = useState(null);
+  // v0.3.38 Fase 5 (T4) — "Apagar dados financeiros" trocou window.confirm por
+  // confirmação por digitação, dado o alcance da ação (agora propaga ao servidor).
+  const [resetDlgAberto, setResetDlgAberto] = useState(false);
+  const [resetTexto, setResetTexto] = useState("");
 
   const ICONS=["🍽️","🚗","🏠","❤️","🎮","📚","👕","💻","💰","📦","✈️","🐾","🎓","🛒","💊","🎨","🏋️","🎯","🔧","🎁","🏦","🎪","🌍"];
   const COLORS=["#00A878","#F5B700","#E8504A","#4FC3F7","#CE93D8","#80DEEA","#FFAB40","#F48FB1","#A5D6A7","#B0BEC5","#7C3AED","#0891B2","#DB2777","#6366F1","#F97316","#84CC16","#34D399","#FB923C"];
@@ -136,6 +140,17 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
         cancelLabel={confirmDlg?.cancelLabel} colors={C}
         onCancel={()=>setConfirmDlg(null)} onConfirm={()=>confirmDlg?.onConfirm?.()}
       />
+
+      {/* v0.3.38 Fase 5 (T4) — confirmação por digitação para apagar dados financeiros */}
+      <ConfirmDialog
+        open={resetDlgAberto} title="Apagar dados financeiros" icon="⚠️" tone="coral"
+        message='Remove lançamentos, contas, cartões, faturas, saldos iniciais e simulações — e propaga o apagamento ao servidor, se a sincronização estiver configurada e logada. Preserva categorias, limites/metas e Pessoas. Um backup é baixado automaticamente antes. Essa ação não pode ser desfeita. Digite APAGAR para confirmar.'
+        confirmLabel="Apagar definitivamente" confirmDisabled={resetTexto.trim().toUpperCase()!=="APAGAR"} colors={C}
+        onCancel={()=>setResetDlgAberto(false)}
+        onConfirm={()=>{ setResetDlgAberto(false); onReset(); }}
+      >
+        <input autoFocus style={inp2} placeholder="Digite APAGAR" value={resetTexto} onChange={e=>setResetTexto(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&resetTexto.trim().toUpperCase()==="APAGAR"){ setResetDlgAberto(false); onReset(); } }}/>
+      </ConfirmDialog>
 
       <div style={{ display:"flex", gap:4 }}>
         {[{id:"cats",l:"🏷️ Categorias"},{id:"auto",l:"🤖 Autocategorização"},{id:"cards",l:"💳 Cartões"},{id:"contas",l:"🏦 Contas"},{id:"geral",l:"⚙️ Geral"},{id:"sync",l:"🔄 Sincronização"},{id:"dados",l:"💿 Dados"}].map(s=>(
@@ -513,8 +528,8 @@ export function ParamsTab({ cats, params, setParams, flatCats, addRootCat, addSu
 
               <div style={{ background:C.coral+"11", border:`1px solid ${C.coral}44`, borderRadius:10, padding:"13px 15px" }}>
                 <div style={{ fontWeight:600, fontSize:13, marginBottom:4, color:C.coral }}>⚠️ Apagar dados financeiros</div>
-                <div style={{ fontSize:12, color:C.soft, marginBottom:10 }}>Remove lançamentos, contas, cartões, faturas, saldos iniciais e simulações. Preserva categorias, subcategorias, limites/metas, parâmetros e toda a aba Pessoas. Essa ação não pode ser desfeita.</div>
-                <button onClick={()=>{ if(window.confirm("Apagar lançamentos, contas, cartões, faturas e saldos? Categorias, limites/metas e Pessoas serão preservados.")) onReset(); }} style={btn2(C.coral, { padding:"7px 14px", fontSize:13 })}>Apagar dados financeiros</button>
+                <div style={{ fontSize:12, color:C.soft, marginBottom:10 }}>Remove lançamentos, contas, cartões, faturas, saldos iniciais e simulações — e propaga ao servidor, se a sincronização estiver logada. Preserva categorias, subcategorias, limites/metas, parâmetros e toda a aba Pessoas. Essa ação não pode ser desfeita.</div>
+                <button onClick={()=>{ setResetTexto(""); setResetDlgAberto(true); }} style={btn2(C.coral, { padding:"7px 14px", fontSize:13 })}>Apagar dados financeiros</button>
               </div>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { RequiredFieldModal, requiredFieldInfo, highlightIfRequired } from "./components/ui/RequiredFieldModal.jsx";
 import { useToasts, ToastHost } from "./components/ui/Toast.jsx";
 import { moveCardTransactions, moveAccountTransactions, recategorizeCategory } from "./services/reassignmentService.js";
@@ -1249,7 +1249,34 @@ export default function App() {
     }
   }, [syncSession, usuario, syncing, syncEstado, buildSyncPayload, handleExport, restoreBackupPayload, pushToast, setSyncEstado, resolverConflitoDeSincronizacao]);
 
-  const handleReset = () => {
+  // v0.3.38 Fase 5 (D6) — sync ao abrir, ao sair, além do botão manual que já
+  // existia. `handleSyncNow` já cobre todas as guardas (config, login, usuario
+  // preenchido, `syncing` em andamento) — os dois gatilhos abaixo só chamam a
+  // mesma função, sem duplicar lógica de decisão.
+  const syncAoAbrirDisparado = useRef(false);
+  useEffect(() => {
+    if (syncAoAbrirDisparado.current) return;
+    if (!isSupabaseConfigured || !syncSession || !String(usuario || "").trim()) return;
+    syncAoAbrirDisparado.current = true;
+    handleSyncNow();
+  }, [syncSession, usuario, handleSyncNow]);
+
+  useEffect(() => {
+    const aoTrocarVisibilidade = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (!isSupabaseConfigured || !syncSession || !String(usuario || "").trim()) return;
+      handleSyncNow();
+    };
+    document.addEventListener("visibilitychange", aoTrocarVisibilidade);
+    return () => document.removeEventListener("visibilitychange", aoTrocarVisibilidade);
+  }, [syncSession, usuario, handleSyncNow]);
+
+  // v0.3.38 Fase 5 (T4) — antes só zerava localmente; "Apagar dados
+  // financeiros" agora propaga ao servidor como o próprio apagamento (não
+  // fica pendurado esperando o próximo sync manual encontrar a divergência).
+  // A confirmação por digitação e o backup obrigatório vivem na chamada
+  // (aplicarResetLocal continua síncrono e é reaproveitado por baixo).
+  const aplicarResetLocal = () => {
     const emptyState = {
       trans: [],
       cards: [],
@@ -1275,9 +1302,8 @@ export default function App() {
     lsSave("usuario", usuario);
     // v0.3.38 Fase 3 — mesmo raciocínio para o metadado de sincronismo: sem
     // isto, "Apagar dados financeiros" tem resultado diferente dependendo de
-    // haver reload depois (ver DEC-0043). Preservar mantém o reset como uma
-    // mudança local comum, sujeita à trava otimista normal do próximo sync —
-    // a propagação explícita do reset ao servidor fica para a Fase 5.
+    // haver reload depois (ver DEC-0043). `handleReset` (acima) grava a
+    // versão nova depois do push — isto aqui só preserva o valor atual até lá.
     lsSave("syncEstado", syncEstado);
 
     setTrans(emptyState.trans);
@@ -1298,6 +1324,48 @@ export default function App() {
     setSelMonth(todayMonthKey());
     resetImport();
     setTab("dashboard");
+  };
+
+  const handleReset = async () => {
+    // T4 — backup automático obrigatório antes de apagar. Se falhar, aborta:
+    // nada é apagado sem uma cópia de segurança gerada com sucesso.
+    const backupOk = handleExport();
+    if (!backupOk) {
+      pushToast({ message: "Backup automático falhou. Nada foi apagado.", tone: "coral", durationMs: 9000 });
+      return;
+    }
+
+    // Payload do estado zerado, montado ANTES de aplicar localmente — os
+    // setters são assíncronos, e o fechamento aqui já tem os valores certos
+    // (metas/pessoas/dividas/despPess/cats/params preservados, o resto vazio).
+    const payloadVazio = {
+      trans: [], contas: [], metas, pessoas, dividas, despPess, cards: [], cats,
+      params: { ...params, autoCategoryRules: Array.isArray(params?.autoCategoryRules) ? params.autoCategoryRules : [] },
+      saldosIniciais: {}, faturas: [], simulacoes: [], cofrinhos: [],
+    };
+
+    aplicarResetLocal();
+
+    // T4 — propaga o apagamento ao servidor quando a sincronização está
+    // configurada e logada. Sem isso, o servidor continuaria com os dados
+    // antigos até o próximo "Sincronizar agora" encontrar a divergência.
+    if (!isSupabaseConfigured || !syncSession || !String(usuario || "").trim()) {
+      pushToast({ message: "Dados apagados neste dispositivo.", tone: "emerald" });
+      return;
+    }
+
+    const push = await pushEstado({ payload: payloadVazio, usuario, versaoEsperada: syncEstado.versao });
+    if (push.ok) {
+      setSyncEstado({ versao: push.versao, sincronizadoEm: push.atualizadoEm });
+      pushToast({ message: "Dados apagados e propagados ao servidor.", tone: "emerald" });
+    } else if (push.motivo === "conflito") {
+      pushToast({
+        message: "Dados apagados neste dispositivo, mas outro sincronizou primeiro no servidor. Sincronize novamente para propagar o apagamento.",
+        tone: "gold", durationMs: 9000,
+      });
+    } else {
+      pushToast({ message: "Dados apagados neste dispositivo, mas falhou ao propagar ao servidor. Sincronize novamente.", tone: "coral", durationMs: 9000 });
+    }
   };
 
   // Category CRUD
